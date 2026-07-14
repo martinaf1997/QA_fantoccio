@@ -9,6 +9,7 @@ Basata e adattata dal progetto [relative_dose_1d](https://github.com/) di Luis A
 - **Caricamento multi-file**: puoi caricare più file `.data` e più file `.mcc` insieme; tutte le curve trovate vengono raccolte in un unico elenco selezionabile.
 - **Parsing multi-curva**: un singolo file (soprattutto `.mcc`) può contenere più scansioni (PDD, profili inplane/crossplane, a diverse profondità/campi): l'app le estrae tutte e le presenta in un menu a tendina, etichettate con file di origine, tipo, direzione, profondità e field size.
 - **Analisi gamma index 1D** (globale, dosi normalizzate 0–100%), con parametri configurabili: dose difference [%], distance-to-agreement [mm], soglia dose [%], punti di interpolazione.
+- **Dose a profondità specifica** (solo per le PDD): confronto tra commissioning e misura della dose interpolata a una profondità scelta (default 100 mm), con verifica di tolleranza **±1%** (differenza assoluta in punti percentuali).
 - **Flatness, Symmetry e Penombra** (solo per i profili), calcolate secondo definizione IEC-style, con:
   - verifica di tolleranza **±1%** applicata solo a **Flatness** e **Symmetry**;
   - Field size, Center e Penombra riportati per riferimento, senza verifica di tolleranza;
