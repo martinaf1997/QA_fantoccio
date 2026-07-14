@@ -90,8 +90,14 @@ def _normalize(data: np.ndarray) -> np.ndarray:
 
 
 def bytes_to_lines(file_bytes: bytes) -> list[str]:
-    """Decode uploaded file bytes into a list of stripped text lines."""
-    text = file_bytes.decode("utf-8", errors="replace")
+    """Decode uploaded file bytes into a list of stripped text lines.
+    Real-world PTW .mcc exports are sometimes not valid UTF-8 (stray
+    extended-ASCII bytes in free-text metadata fields), so fall back to
+    latin-1 (which never raises) if strict UTF-8 decoding fails."""
+    try:
+        text = file_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        text = file_bytes.decode("latin-1")
     return [line.strip() for line in text.splitlines()]
 
 
@@ -239,72 +245,115 @@ def _mcc_curve_type(curvetype: str) -> tuple[str, str]:
     return "UNKNOWN", ""
 
 
+def _parse_mcc_block_metadata(block: list[str]) -> dict:
+    """Parse ``KEY=VALUE`` metadata lines within an mcc scan block."""
+    meta = {}
+    for l in block:
+        if "=" in l and not l.startswith(("BEGIN_DATA", "END_DATA")):
+            key, _, value = l.partition("=")
+            meta[key.strip().upper()] = value.strip()
+    return meta
+
+
+def _parse_scan_block(block: list[str], source: str = "") -> "Curve | None":
+    """Parse a single curve out of the lines found between a
+    ``BEGIN_SCAN``/``BEGIN_SCAN_DATA`` and its matching end tag: reads
+    the KEY=VALUE metadata and the BEGIN_DATA/END_DATA numeric rows."""
+    meta = _parse_mcc_block_metadata(block)
+
+    curve_type, direction = _mcc_curve_type(meta.get("SCAN_CURVETYPE", ""))
+
+    depth_mm = None
+    if "SCAN_DEPTH" in meta:
+        try:
+            depth_mm = float(meta["SCAN_DEPTH"])
+        except ValueError:
+            pass
+
+    field_size = ""
+    fi = meta.get("FIELD_INPLANE")
+    fc = meta.get("FIELD_CROSSPLANE")
+    if fi and fc:
+        field_size = f"{fi}x{fc}"
+
+    try:
+        start_data = block.index("BEGIN_DATA") + 1
+        end_data = block.index("END_DATA")
+    except ValueError:
+        return None
+
+    rows = []
+    for row_line in block[start_data:end_data]:
+        parts = row_line.split()
+        if len(parts) >= 2:
+            try:
+                rows.append([float(parts[0]), float(parts[1])])
+            except ValueError:
+                pass
+
+    if not rows:
+        return None
+
+    data = _normalize(np.array(rows))
+    return Curve(
+        data=data,
+        curve_type=curve_type if curve_type != "UNKNOWN" else _guess_type(data),
+        direction=direction,
+        depth_mm=depth_mm,
+        field_size=field_size,
+        source=source,
+    )
+
+
 def parse_mcc(lines: list[str], source: str = "") -> list[Curve]:
-    """Extract every scan found in a PTW (.mcc) file."""
+    """Extract every scan found in a PTW (.mcc) file.
+
+    Real-world CC-Export files (PTW BeamScan/Mephysto) wrap ALL curves of
+    a session in a single outer ``BEGIN_SCAN_DATA ... END_SCAN_DATA``
+    block, with one ``BEGIN_SCAN <n> ... END_SCAN <n>`` sub-block per
+    curve (PDD, inplane profile, crossplane profile, ...). Older/simpler
+    exports may instead use one ``BEGIN_SCAN_DATA ... END_SCAN_DATA``
+    block directly per curve (no nested BEGIN_SCAN) -- that flat layout
+    is supported as a fallback.
+    """
+    n = len(lines)
     curves: list[Curve] = []
 
-    n = len(lines)
     i = 0
     while i < n:
-        if lines[i] == "BEGIN_SCAN_DATA":
-            try:
-                end_scan = lines.index("END_SCAN_DATA", i + 1)
-            except ValueError:
-                break
-            block = lines[i + 1:end_scan]
-
-            meta = {}
-            for l in block:
-                if "=" in l:
-                    key, _, value = l.partition("=")
-                    meta[key.strip().upper()] = value.strip()
-
-            curve_type, direction = _mcc_curve_type(meta.get("SCAN_CURVETYPE", ""))
-
-            depth_mm = None
-            if "SCAN_DEPTH" in meta:
-                try:
-                    depth_mm = float(meta["SCAN_DEPTH"])
-                except ValueError:
-                    pass
-
-            field_size = ""
-            fi = meta.get("FIELD_INPLANE")
-            fc = meta.get("FIELD_CROSSPLANE")
-            if fi and fc:
-                field_size = f"{fi}x{fc}"
-
-            try:
-                start_data = block.index("BEGIN_DATA") + 1
-                end_data = block.index("END_DATA")
-            except ValueError:
-                i = end_scan + 1
+        tokens = lines[i].split()
+        if tokens and tokens[0] == "BEGIN_SCAN":
+            end_idx = None
+            for j in range(i + 1, n):
+                t2 = lines[j].split()
+                if t2 and t2[0] == "END_SCAN":
+                    end_idx = j
+                    break
+            if end_idx is None:
+                i += 1
                 continue
-
-            rows = []
-            for row_line in block[start_data:end_data]:
-                parts = row_line.split()
-                if len(parts) >= 2:
-                    try:
-                        rows.append([float(parts[0]), float(parts[1])])
-                    except ValueError:
-                        pass
-
-            if rows:
-                data = _normalize(np.array(rows))
-                curves.append(
-                    Curve(
-                        data=data,
-                        curve_type=curve_type if curve_type != "UNKNOWN" else _guess_type(data),
-                        direction=direction,
-                        depth_mm=depth_mm,
-                        field_size=field_size,
-                        source=source,
-                    )
-                )
-            i = end_scan + 1
+            curve = _parse_scan_block(lines[i + 1:end_idx], source)
+            if curve is not None:
+                curves.append(curve)
+            i = end_idx + 1
             continue
         i += 1
+
+    if not curves:
+        # Fallback: flat format, one BEGIN_SCAN_DATA/END_SCAN_DATA per curve.
+        i = 0
+        while i < n:
+            if lines[i] == "BEGIN_SCAN_DATA":
+                try:
+                    end_scan = lines.index("END_SCAN_DATA", i + 1)
+                except ValueError:
+                    break
+                curve = _parse_scan_block(lines[i + 1:end_scan], source)
+                if curve is not None:
+                    curves.append(curve)
+                i = end_scan + 1
+                continue
+            i += 1
 
     for idx, c in enumerate(curves, start=1):
         c.build_label(idx)
