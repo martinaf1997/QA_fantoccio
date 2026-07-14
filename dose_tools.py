@@ -502,44 +502,133 @@ def _find_crossing(x: np.ndarray, y: np.ndarray, level: float,
     return float(x1 + (level - y1) * (x2 - x1) / (y2 - y1))
 
 
+def _nearest_index(x: np.ndarray, value: float = 0.0) -> int:
+    return int(np.argmin(np.abs(x - value)))
+
+
+def detect_profile_shape(profile: np.ndarray, edge_fraction: float = 0.15) -> str:
+    """Detect whether a profile covers the full field (both sides of the
+    central axis, conventionally x=0 in these file formats) or only one
+    side ("half profile" -- a common commissioning shortcut that assumes
+    a symmetric field and only scans from the central axis out to one
+    edge).
+
+    Heuristic: compares how far the measured positions extend into
+    negative x vs positive x. If one side has negligible extent relative
+    to the other, only that other side was actually measured.
+
+    Note: this deliberately does NOT use the dose peak position, because
+    real beams can have a "horn" (off-axis dose maximum) so the peak is
+    not always at the true central axis -- using it as a proxy for "is
+    this a half scan" is unreliable. The geometric position x=0 is used
+    instead, consistent with the central-axis convention observed in
+    both w2CAD and PTW mcc exports.
+
+    Returns
+    -------
+    'full', 'right' (only the positive/right side was measured) or
+    'left' (only the negative/left side was measured).
+    """
+    x = profile[:, 0]
+    xmin, xmax = float(np.min(x)), float(np.max(x))
+    neg_span = max(0.0, -xmin)
+    pos_span = max(0.0, xmax)
+    total_span = neg_span + pos_span
+    if total_span <= 0:
+        return "full"
+    if neg_span / total_span <= edge_fraction:
+        return "right"
+    if pos_span / total_span <= edge_fraction:
+        return "left"
+    return "full"
+
+
 def field_edges(profile: np.ndarray, level_percent: float = 50.0):
     """(left_edge, right_edge) positions where the profile crosses
-    `level_percent` of its maximum dose."""
+    `level_percent` of its maximum dose. For a half profile (see
+    ``detect_profile_shape``), the missing edge is estimated by mirroring
+    the measured edge around the central axis (x=0), assuming a
+    symmetric field."""
     x, y = profile[:, 0], profile[:, 1]
-    center_idx = int(np.argmax(y))
     level = np.max(y) * level_percent / 100.0
-    left = _find_crossing(x, y, level, "left", center_idx)
-    right = _find_crossing(x, y, level, "right", center_idx)
+    shape = detect_profile_shape(profile)
+
+    if shape == "full":
+        peak_idx = int(np.argmax(y))
+        left = _find_crossing(x, y, level, "left", peak_idx)
+        right = _find_crossing(x, y, level, "right", peak_idx)
+    else:
+        center_idx = _nearest_index(x, 0.0)
+        center_x = x[center_idx]
+        if shape == "right":
+            right = _find_crossing(x, y, level, "right", center_idx)
+            left = 2 * center_x - right
+        else:
+            left = _find_crossing(x, y, level, "left", center_idx)
+            right = 2 * center_x - left
     return left, right
 
 
 def penumbra(profile: np.ndarray, low: float = 20.0, high: float = 80.0):
     """(left_penumbra_mm, right_penumbra_mm): distance between the
-    `low`% and `high`% dose levels at each field edge (default 20-80%)."""
+    `low`% and `high`% dose levels at each field edge (default 20-80%).
+    For a half profile, the penumbra of the un-measured side cannot be
+    determined and is returned as NaN."""
     x, y = profile[:, 0], profile[:, 1]
-    center_idx = int(np.argmax(y))
     ymax = np.max(y)
+    shape = detect_profile_shape(profile)
+    ref_idx = int(np.argmax(y)) if shape == "full" else _nearest_index(x, 0.0)
 
-    l_high = _find_crossing(x, y, high / 100.0 * ymax, "left", center_idx)
-    l_low = _find_crossing(x, y, low / 100.0 * ymax, "left", center_idx)
-    r_high = _find_crossing(x, y, high / 100.0 * ymax, "right", center_idx)
-    r_low = _find_crossing(x, y, low / 100.0 * ymax, "right", center_idx)
+    if shape in ("full", "left"):
+        l_high = _find_crossing(x, y, high / 100.0 * ymax, "left", ref_idx)
+        l_low = _find_crossing(x, y, low / 100.0 * ymax, "left", ref_idx)
+        left_pen = abs(l_low - l_high)
+    else:
+        left_pen = float("nan")
 
-    return abs(l_low - l_high), abs(r_low - r_high)
+    if shape in ("full", "right"):
+        r_high = _find_crossing(x, y, high / 100.0 * ymax, "right", ref_idx)
+        r_low = _find_crossing(x, y, low / 100.0 * ymax, "right", ref_idx)
+        right_pen = abs(r_low - r_high)
+    else:
+        right_pen = float("nan")
+
+    return left_pen, right_pen
 
 
 def flatness_symmetry(profile: np.ndarray, field_level: float = 50.0,
                        central_fraction: float = 0.8):
     """Flatness (IEC-style, (Dmax-Dmin)/(Dmax+Dmin)*100) and symmetry
     (point-to-point mirrored dose difference, %) computed over the
-    central `central_fraction` of the field width (default 80%)."""
+    central `central_fraction` of the field width (default 80%).
+
+    Half profiles (only one side of the central axis measured -- see
+    ``detect_profile_shape``): the field width/central region is
+    estimated by mirroring the measured edge around the central axis
+    (x=0, assumes a symmetric field -- the usual reason a half scan was
+    taken in the first place). Flatness is then computed from the
+    available side only (equivalent to the full-profile result under
+    the symmetry assumption). Symmetry itself cannot be verified from a
+    single side and is returned as NaN.
+    """
     x, y = profile[:, 0], profile[:, 1]
+    shape = detect_profile_shape(profile)
+
     left, right = field_edges(profile, field_level)
     field_size = right - left
     margin = (1 - central_fraction) / 2 * field_size
-    xin, xout = left + margin, right - margin
 
-    mask = (x >= xin) & (x <= xout)
+    if shape == "full":
+        xin, xout = left + margin, right - margin
+        mask = (x >= xin) & (x <= xout)
+    else:
+        center_x = x[_nearest_index(x, 0.0)]
+        if shape == "right":
+            xin, xout = center_x, right - margin
+        else:  # 'left'
+            xin, xout = left + margin, center_x
+        mask = (x >= xin) & (x <= xout)
+
     if mask.sum() < 2:
         raise ValueError("Not enough points in the central field region "
                           "to compute flatness/symmetry.")
@@ -548,20 +637,29 @@ def flatness_symmetry(profile: np.ndarray, field_level: float = 50.0,
     Dmin = float(np.min(y[mask]))
     flatness = 100.0 * (Dmax - Dmin) / (Dmax + Dmin)
 
-    center = (left + right) / 2.0
-    x_central = x[mask]
-    y_central = y[mask]
-    y_mirror = np.interp(2 * center - x_central, x, y)
-    D_center = float(np.interp(center, x, y))
-    symmetry = 100.0 * float(np.max(np.abs(y_central - y_mirror))) / D_center if D_center else float("nan")
+    if shape == "full":
+        center = (left + right) / 2.0
+        x_central = x[mask]
+        y_central = y[mask]
+        y_mirror = np.interp(2 * center - x_central, x, y)
+        D_center = float(np.interp(center, x, y))
+        symmetry = 100.0 * float(np.max(np.abs(y_central - y_mirror))) / D_center if D_center else float("nan")
+    else:
+        # Center offset and symmetry cannot be verified with only one
+        # side of the profile measured; report the nominal central axis.
+        center = x[_nearest_index(x, 0.0)]
+        symmetry = float("nan")
 
-    return flatness, symmetry, field_size, center
+    return flatness, symmetry, field_size, center, shape
 
 
 def profile_metrics(profile: np.ndarray) -> dict:
     """Compute flatness, symmetry, field size, center and penumbra
-    (left/right) for a normalized dose profile (N,2) array."""
-    flatness, symmetry, field_size, center = flatness_symmetry(profile)
+    (left/right) for a normalized dose profile (N,2) array. Works for
+    both full and half (single-side) profiles -- see
+    ``detect_profile_shape``. For half profiles, symmetry (and the
+    penumbra of the un-measured side) are returned as NaN."""
+    flatness, symmetry, field_size, center, shape = flatness_symmetry(profile)
     left_pen, right_pen = penumbra(profile)
     return {
         "Flatness [%]": flatness,
@@ -570,4 +668,5 @@ def profile_metrics(profile: np.ndarray) -> dict:
         "Center [mm]": center,
         "Left penumbra [mm]": left_pen,
         "Right penumbra [mm]": right_pen,
+        "_shape": shape,
     }
