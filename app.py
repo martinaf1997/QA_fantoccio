@@ -209,52 +209,106 @@ if ref_curves and eval_curves:
         if curve_type == "PROFILE":
             st.subheader("📐 Risultati — Flatness / Symmetry / Penumbra")
 
+            # Parameters subject to the ±1% tolerance check.
+            TOLERANCE_KEYS = ("Flatness [%]", "Symmetry [%]")
+            TOLERANCE_PP = 1.0  # percentage points
+
+            SHAPE_LABEL = {
+                "full": "profilo completo",
+                "left": "profilo parziale (solo lato sinistro/negativo)",
+                "right": "profilo parziale (solo lato destro/positivo)",
+            }
+
             try:
                 ref_metrics = profile_metrics(ref_curve.data)
                 eval_metrics = profile_metrics(eval_curve.data)
 
+                ref_shape = ref_metrics.pop("_shape")
+                eval_shape = eval_metrics.pop("_shape")
+
+                if ref_shape != "full" or eval_shape != "full":
+                    st.info(
+                        f"ℹ️ Commissioning: **{SHAPE_LABEL[ref_shape]}** — Misura: "
+                        f"**{SHAPE_LABEL[eval_shape]}**. Per i profili parziali, field size, "
+                        "flatness e penombra sono stimati assumendo un campo simmetrico rispetto "
+                        "all'asse centrale; la symmetry non è calcolabile da un solo lato e viene "
+                        "riportata come N/A."
+                    )
+
                 rows = []
-                all_ok = True
+                tolerance_ok = True
                 for key in ref_metrics:
                     ref_val = ref_metrics[key]
                     eval_val = eval_metrics[key]
 
-                    if key.endswith("[%]"):
-                        # Flatness/Symmetry are already percentages:
-                        # compare the absolute difference in percentage points.
-                        diff = eval_val - ref_val
-                        tol_ok = abs(diff) <= 1.0
-                        diff_str = f"{diff:+.2f} pp"
-                    else:
-                        # mm quantities (field size, center, penumbra):
-                        # compare the relative percent difference.
-                        diff = 100.0 * (eval_val - ref_val) / ref_val if ref_val else float("nan")
-                        tol_ok = abs(diff) <= 1.0
-                        diff_str = f"{diff:+.2f}%"
+                    ref_is_nan = ref_val is None or (isinstance(ref_val, float) and np.isnan(ref_val))
+                    eval_is_nan = eval_val is None or (isinstance(eval_val, float) and np.isnan(eval_val))
 
-                    all_ok = all_ok and tol_ok
+                    if ref_is_nan or eval_is_nan:
+                        diff_str = "N/A"
+                        verifica_str = "N/A"
+                    else:
+                        if key.endswith("[%]"):
+                            # Flatness/Symmetry are already percentages:
+                            # difference expressed in percentage points.
+                            diff = eval_val - ref_val
+                            diff_str = f"{diff:+.2f} pp"
+                        elif key == "Center [mm]":
+                            # Center is conventionally ~0 (nominal central
+                            # axis), so a relative % is not meaningful here.
+                            diff = eval_val - ref_val
+                            diff_str = f"{diff:+.2f} mm"
+                        else:
+                            # mm quantities (field size, penumbra):
+                            # difference expressed as relative percent.
+                            diff = 100.0 * (eval_val - ref_val) / ref_val if ref_val else float("nan")
+                            diff_str = f"{diff:+.2f}%"
+
+                        if key in TOLERANCE_KEYS:
+                            tol_ok = abs(diff) <= TOLERANCE_PP
+                            tolerance_ok = tolerance_ok and tol_ok
+                            verifica_str = "✅" if tol_ok else "❌"
+                        else:
+                            # Reported for reference only -- no pass/fail check.
+                            verifica_str = "—"
+
                     rows.append({
                         "Parametro": key,
-                        "Commissioning": round(ref_val, 3),
-                        "Misura": round(eval_val, 3),
+                        "Commissioning": "N/A" if ref_is_nan else round(ref_val, 3),
+                        "Misura": "N/A" if eval_is_nan else round(eval_val, 3),
                         "Differenza": diff_str,
-                        "Entro ±1%": "✅" if tol_ok else "❌",
+                        "Verifica ±1%": verifica_str,
                     })
 
                 st.dataframe(rows, use_container_width=True, hide_index=True)
 
-                if all_ok:
-                    st.success("Tutti i parametri sono entro la tolleranza ±1% rispetto al commissioning.")
+                if tolerance_ok:
+                    st.success("Flatness e Symmetry sono entro la tolleranza ±1% rispetto al commissioning "
+                               "(N/A escluso dalla verifica).")
                 else:
-                    st.error("Uno o più parametri superano la tolleranza ±1% rispetto al commissioning.")
+                    st.error("Flatness e/o Symmetry superano la tolleranza ±1% rispetto al commissioning.")
+
+                # Dedicated alert: field size must match between commissioning
+                # and measurement (no tolerance check, just a warning if different).
+                ref_fs = ref_metrics["Field size [mm]"]
+                eval_fs = eval_metrics["Field size [mm]"]
+                fs_diff_percent = 100.0 * (eval_fs - ref_fs) / ref_fs if ref_fs else float("nan")
+                if abs(fs_diff_percent) > TOLERANCE_PP:
+                    st.warning(
+                        f"⚠️ Il field size misurato ({eval_fs:.1f} mm) differisce da quello di "
+                        f"commissioning ({ref_fs:.1f} mm) di {fs_diff_percent:+.2f}%. "
+                        "Verifica di aver selezionato la coppia di curve corretta (stesso campo)."
+                    )
 
                 st.caption(
-                    "Nota: per Flatness e Symmetry (già espresse in %) la tolleranza è applicata come "
-                    "differenza assoluta in punti percentuali. Per Field size, Center e Penombra (mm) "
-                    "la tolleranza è applicata come differenza percentuale relativa al valore di "
-                    "commissioning. Flatness/Symmetry sono calcolate come definizione IEC "
+                    "Nota: la tolleranza ±1% è verificata solo per Flatness e Symmetry (differenza "
+                    "assoluta in punti percentuali). Field size, Center e Penombra sono riportati per "
+                    "riferimento senza verifica di tolleranza; per il Field size viene mostrato un "
+                    "avviso separato se la differenza rispetto al commissioning supera l'1%. "
+                    "Flatness/Symmetry sono calcolate come definizione IEC "
                     "((Dmax−Dmin)/(Dmax+Dmin)·100) sul volume centrale (80%) del campo; la penombra è "
-                    "la distanza tra i livelli 80%-20% ai bordi del campo."
+                    "la distanza tra i livelli 80%-20% ai bordi del campo. Per i profili parziali "
+                    "(solo un lato misurato) si assume un campo simmetrico rispetto all'asse centrale."
                 )
 
             except ValueError as e:
