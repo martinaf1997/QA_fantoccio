@@ -26,10 +26,11 @@ st.set_page_config(page_title="Relative Dose 1D - Commissioning QA", layout="wid
 
 st.title("Relative Dose 1D — Commissioning vs Measurement QA")
 st.caption(
-    "Carica il file di **commissioning** (formato w2CAD, `.data`) e il file di "
-    "**misura** (formato PTW, `.mcc`). Il confronto include l'analisi gamma "
-    "(PDD e profili) e, solo per i profili, flatness / symmetry / penombra "
-    "con verifica di tolleranza ±1%."
+    "Carica uno o più file di **commissioning** (formato w2CAD, `.data`) e uno o più "
+    "file di **misura** (formato PTW, `.mcc`). Tutte le curve trovate nei file caricati "
+    "vengono raccolte in un unico elenco da cui scegliere cosa confrontare. Il confronto "
+    "include l'analisi gamma (PDD e profili) e, solo per i profili, flatness / symmetry / "
+    "penombra con verifica di tolleranza ±1%."
 )
 
 # --------------------------------------------------------------------
@@ -48,29 +49,49 @@ col_up1, col_up2 = st.columns(2)
 
 with col_up1:
     st.subheader("1️⃣ Commissioning (.data)")
-    commissioning_file = st.file_uploader(
-        "File di commissioning (w2CAD)", type=["data", "dat", "txt"], key="commissioning_upload"
+    commissioning_files = st.file_uploader(
+        "File di commissioning (w2CAD)", type=["data", "dat", "txt"],
+        key="commissioning_upload", accept_multiple_files=True,
     )
-    if commissioning_file is not None:
-        curves = parse_file(commissioning_file.getvalue(), commissioning_file.name)
+    if commissioning_files:
+        curves = []
+        errors = []
+        for f in commissioning_files:
+            file_curves = parse_file(f.getvalue(), f.name)
+            if file_curves:
+                curves.extend(file_curves)
+            else:
+                errors.append(f.name)
         st.session_state.commissioning_curves = curves
         if curves:
-            st.success(f"{len(curves)} curva/e trovata/e nel file di commissioning.")
-        else:
-            st.error("Nessuna curva riconosciuta in questo file. Verifica il formato.")
+            st.success(f"{len(curves)} curva/e trovata/e in {len(commissioning_files)} file di commissioning.")
+        if errors:
+            st.error("Nessuna curva riconosciuta in: " + ", ".join(errors))
+    else:
+        st.session_state.commissioning_curves = []
 
 with col_up2:
     st.subheader("2️⃣ Misura (.mcc)")
-    measurement_file = st.file_uploader(
-        "File di misura (PTW)", type=["mcc"], key="measurement_upload"
+    measurement_files = st.file_uploader(
+        "File di misura (PTW)", type=["mcc"],
+        key="measurement_upload", accept_multiple_files=True,
     )
-    if measurement_file is not None:
-        curves = parse_file(measurement_file.getvalue(), measurement_file.name)
+    if measurement_files:
+        curves = []
+        errors = []
+        for f in measurement_files:
+            file_curves = parse_file(f.getvalue(), f.name)
+            if file_curves:
+                curves.extend(file_curves)
+            else:
+                errors.append(f.name)
         st.session_state.measurement_curves = curves
         if curves:
-            st.success(f"{len(curves)} curva/e trovata/e nel file di misura.")
-        else:
-            st.error("Nessuna curva riconosciuta in questo file. Verifica il formato.")
+            st.success(f"{len(curves)} curva/e trovata/e in {len(measurement_files)} file di misura.")
+        if errors:
+            st.error("Nessuna curva riconosciuta in: " + ", ".join(errors))
+    else:
+        st.session_state.measurement_curves = []
 
 
 # --------------------------------------------------------------------
@@ -84,13 +105,13 @@ if ref_curves and eval_curves:
 
     col_sel1, col_sel2 = st.columns(2)
     with col_sel1:
-        ref_labels = [c.label for c in ref_curves]
+        ref_labels = [f"{c.source} — {c.label}" for c in ref_curves]
         ref_idx = st.selectbox("Curva di commissioning (riferimento)", range(len(ref_labels)),
                                 format_func=lambda i: ref_labels[i])
         ref_curve = ref_curves[ref_idx]
 
     with col_sel2:
-        eval_labels = [c.label for c in eval_curves]
+        eval_labels = [f"{c.source} — {c.label}" for c in eval_curves]
         eval_idx = st.selectbox("Curva di misura (da valutare)", range(len(eval_labels)),
                                  format_func=lambda i: eval_labels[i])
         eval_curve = eval_curves[eval_idx]
@@ -122,9 +143,9 @@ if ref_curves and eval_curves:
     with g2:
         dist_t = st.number_input("DTA [mm]", value=2.0, min_value=0.1, step=0.5)
     with g3:
-        dose_threshold = st.number_input("Soglia dose [%]", value=10.0, min_value=0.0, step=1.0)
+        dose_threshold = st.number_input("Soglia dose [%]", value=0.0, min_value=0.0, step=1.0)
     with g4:
-        interp = st.number_input("Punti interpolati", value=10, min_value=0, step=1)
+        interp = st.number_input("Punti interpolati", value=1, min_value=0, step=1)
 
     run = st.button("▶️ Esegui analisi", type="primary")
 
