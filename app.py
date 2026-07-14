@@ -20,7 +20,7 @@ import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 
-from dose_tools import parse_file, gamma_1d, profile_metrics, Curve
+from dose_tools import parse_file, gamma_1d, profile_metrics, dose_at_depth, Curve
 
 st.set_page_config(page_title="Relative Dose 1D - Commissioning QA", layout="wide")
 
@@ -143,9 +143,9 @@ if ref_curves and eval_curves:
     with g2:
         dist_t = st.number_input("DTA [mm]", value=2.0, min_value=0.1, step=0.5)
     with g3:
-        dose_threshold = st.number_input("Soglia dose [%]", value=0.0, min_value=0.0, step=1.0)
+        dose_threshold = st.number_input("Soglia dose [%]", value=10.0, min_value=0.0, step=1.0)
     with g4:
-        interp = st.number_input("Punti interpolati", value=1, min_value=0, step=1)
+        interp = st.number_input("Punti interpolati", value=10, min_value=0, step=1)
 
     run = st.button("▶️ Esegui analisi", type="primary")
 
@@ -314,7 +314,49 @@ if ref_curves and eval_curves:
             except ValueError as e:
                 st.error(f"Impossibile calcolare i parametri del profilo: {e}")
         else:
-            st.info("Flatness, symmetry e penombra sono calcolate solo per i profili (non per la PDD).")
+            # ------------------------------------------------------------
+            # PDD-only metric: dose at a given depth (default 100 mm)
+            # ------------------------------------------------------------
+            st.subheader("📏 Risultati — Dose a profondità specifica")
+
+            depth_check = st.number_input(
+                "Profondità di confronto [mm]", value=100.0, min_value=0.0, step=1.0,
+                help="Tipicamente 100 mm (dose massima/riferimento). Modificabile per altre profondità di interesse.",
+            )
+
+            ref_d = dose_at_depth(ref_curve.data, depth_check)
+            eval_d = dose_at_depth(eval_curve.data, depth_check)
+
+            if np.isnan(ref_d) or np.isnan(eval_d):
+                st.error(
+                    f"La profondità {depth_check:g} mm è fuori dal range misurato in almeno una "
+                    "delle due curve: impossibile calcolare la dose a questa profondità."
+                )
+            else:
+                diff_pp = eval_d - ref_d
+                tol_ok = abs(diff_pp) <= 1.0
+
+                d1, d2, d3 = st.columns(3)
+                d1.metric(f"Commissioning @ {depth_check:g}mm", f"{ref_d:.2f}%")
+                d2.metric(f"Misura @ {depth_check:g}mm", f"{eval_d:.2f}%", delta=f"{diff_pp:+.2f} pp")
+                d3.metric("Entro ±1%", "✅" if tol_ok else "❌")
+
+                if tol_ok:
+                    st.success(
+                        f"Dose a {depth_check:g}mm entro tolleranza: differenza {diff_pp:+.2f} punti "
+                        "percentuali (≤ ±1%)."
+                    )
+                else:
+                    st.error(
+                        f"Dose a {depth_check:g}mm FUORI tolleranza: differenza {diff_pp:+.2f} punti "
+                        "percentuali (> ±1%)."
+                    )
+
+                st.caption(
+                    "Nota: la tolleranza ±1% è applicata come differenza assoluta in punti percentuali "
+                    "tra la dose (normalizzata 0-100%) di commissioning e di misura, interpolata alla "
+                    "profondità indicata."
+                )
 
 else:
     st.info("Carica entrambi i file (commissioning e misura) per procedere.")
