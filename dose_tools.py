@@ -466,6 +466,16 @@ def gamma_1d(ref: np.ndarray,
     return gamma, gamma_percent, evaluated_points
 
 
+def dose_at_depth(pdd: np.ndarray, depth_mm: float = 100.0) -> float:
+    """Interpolated dose [%] at a given depth on a PDD curve
+    (positions assumed in mm, dose normalized 0-100%). Returns NaN if
+    `depth_mm` falls outside the measured range."""
+    x, y = pdd[:, 0], pdd[:, 1]
+    if depth_mm < np.min(x) or depth_mm > np.max(x):
+        return float("nan")
+    return float(np.interp(depth_mm, x, y))
+
+
 # --------------------------------------------------------------------------
 # Profile metrics: flatness, symmetry, penumbra
 # --------------------------------------------------------------------------
