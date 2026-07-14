@@ -28,6 +28,29 @@ Basata e adattata dal progetto [relative_dose_1d](https://github.com/) di Luis A
 
 I parser sono tolleranti ma seguono le convenzioni osservate nei file reali testati; export molto diversi potrebbero richiedere piccoli adattamenti.
 
+## Esempi
+
+Grafici generati dall'app (dati reali di test perturbati con piccolo rumore sintetico per illustrare un confronto commissioning vs misura tipico).
+
+### PDD
+
+![Esempio analisi PDD](assets/pdd_example.png)
+
+### Profilo
+
+![Esempio analisi profilo](assets/profile_example.png)
+
+Tabella dei parametri corrispondente all'esempio di profilo sopra:
+
+| Parametro | Commissioning | Misura | Differenza | Verifica ±1% |
+|---|---:|---:|---:|:---:|
+| Flatness [%] | 1.731 | 2.358 | +0.63 pp | ✅ |
+| Symmetry [%] | 0.492 | 1.212 | +0.72 pp | ✅ |
+| Field size [mm] | 400.108 | 399.936 | −0.04% | — |
+| Center [mm] | 0.208 | 0.210 | +0.00 mm | — |
+| Left penumbra [mm] | 9.437 | 9.319 | −1.25% | — |
+| Right penumbra [mm] | 9.471 | 9.638 | +1.76% | — |
+
 ## Installazione
 
 ```bash
@@ -63,7 +86,8 @@ streamlit run app.py
 .
 ├── app.py            # interfaccia Streamlit (upload, selezione curve, grafici, tabelle)
 ├── dose_tools.py      # parsing file (.data / .mcc), gamma index, metriche di profilo
-└── requirements.txt   # dipendenze Python
+├── requirements.txt   # dipendenze Python
+└── assets/            # immagini di esempio usate in questo README
 ```
 
 ## Dettagli sulle metriche di profilo
@@ -79,3 +103,7 @@ streamlit run app.py
 - Le metriche di profilo assumono un unico picco/plateau centrale; fasci molto atipici (es. FFF fortemente piccati, wedge, profili diagonali) vanno interpretati con cautela.
 - Per i profili parziali si assume simmetria del campo rispetto a x=0: se il campo reale non è simmetrico, field size/flatness stimati saranno approssimati.
 - Il parsing dei formati `.data`/`.mcc` è stato validato su file reali disponibili durante lo sviluppo; varianti di export non testate potrebbero richiedere adattamenti al parser.
+
+## Licenza
+
+Da definire.
