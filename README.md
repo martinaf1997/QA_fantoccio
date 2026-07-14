@@ -36,6 +36,12 @@ Grafici generati dall'app (dati reali di test perturbati con piccolo rumore sint
 
 ![Esempio analisi PDD](assets/pdd_example.png)
 
+Per questa stessa coppia di curve, il confronto **dose a profondità specifica** (default 100 mm) restituito dall'app è:
+
+| Profondità | Commissioning | Misura | Differenza | Entro ±1% |
+|---|---:|---:|---:|:---:|
+| 100 mm | 69.35% | 69.88% | +0.53 pp | ✅ |
+
 ### Profilo
 
 ![Esempio analisi profilo](assets/profile_example.png)
@@ -78,7 +84,8 @@ streamlit run app.py
 5. Visualizza:
    - il grafico delle curve sovrapposte, la differenza e l'indice gamma;
    - il pass rate gamma e i punti valutati;
-   - (solo per i profili) la tabella flatness/symmetry/penombra con la verifica di tolleranza ±1% su flatness/symmetry e l'eventuale alert sul field size.
+   - **se la curva è una PDD**: il confronto della dose a una profondità scelta (default 100 mm, modificabile), con la verifica di tolleranza ±1%;
+   - **se la curva è un profilo**: la tabella flatness/symmetry/penombra con la verifica di tolleranza ±1% su flatness/symmetry e l'eventuale alert sul field size.
 
 ## Struttura del progetto
 
@@ -90,8 +97,12 @@ streamlit run app.py
 └── assets/            # immagini di esempio usate in questo README
 ```
 
-## Dettagli sulle metriche di profilo
+## Dettagli sulle metriche
 
+**PDD**
+- **Dose a profondità specifica**: dose interpolata linearmente (via `numpy.interp`) alla profondità scelta (default 100 mm) sulle posizioni misurate. Se la profondità richiesta è fuori dal range misurato di una delle due curve, l'app segnala l'errore invece di restituire un valore non affidabile. La tolleranza ±1% è applicata come differenza assoluta in punti percentuali tra commissioning e misura.
+
+**Profili**
 - **Flatness**: `100 · (Dmax − Dmin) / (Dmax + Dmin)` calcolata sul volume centrale (80%) del campo, definito tra i punti al 50% di dose massima ai bordi.
 - **Symmetry**: differenza massima punto-a-punto tra dose e dose speculare rispetto al centro, normalizzata sulla dose al centro (%). Non calcolabile per i profili parziali.
 - **Penombra**: distanza tra i livelli 80%–20% di dose massima ai bordi del campo (sinistro e destro).
