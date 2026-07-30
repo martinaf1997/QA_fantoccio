@@ -20,7 +20,10 @@ import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 
-from dose_tools import parse_file, gamma_1d, profile_metrics, dose_at_depth, Curve
+from dose_tools import (
+    parse_file, gamma_1d, profile_metrics, dose_at_depth, Curve,
+    match_curves_by_field, build_energy_report,
+)
 
 st.set_page_config(page_title="Relative Dose 1D - Commissioning QA", layout="wide")
 
@@ -357,6 +360,65 @@ if ref_curves and eval_curves:
                     "tra la dose (normalizzata 0-100%) di commissioning e di misura, interpolata alla "
                     "profondità indicata."
                 )
+
+    # --------------------------------------------------------------------
+    # Report per energia: tutte le curve (PDD + profili) di uno stesso fascio
+    # --------------------------------------------------------------------
+    st.divider()
+    st.subheader("5️⃣ Report Excel per energia")
+    st.caption(
+        "Genera un report Excel con grafici e tabelle per **tutte** le curve caricate "
+        "(PDD e profili), abbinando automaticamente commissioning e misura per field size. "
+        "Utile per raccogliere in un unico documento l'intera caratterizzazione di un'energia/fascio."
+    )
+
+    energy_label = st.text_input("Nome energia / fascio", value="", placeholder="es. 6X FFF, 6X, 10X...")
+
+    matches, unmatched_ref = match_curves_by_field(ref_curves, eval_curves)
+
+    if matches:
+        preview_rows = [
+            {
+                "Field size": m["field_size"],
+                "Tipo": m["curve_type"],
+                "Commissioning": m["ref"].source,
+                "Misura": m["eval"].source,
+            }
+            for m in matches
+        ]
+        st.write(f"**{len(matches)} coppia/e abbinata/e automaticamente per field size:**")
+        st.dataframe(preview_rows, use_container_width=True, hide_index=True)
+    else:
+        st.warning("Nessuna coppia commissioning/misura con field size corrispondente trovata.")
+
+    if unmatched_ref:
+        unmatched_labels = [f"{c.source} — {c.label}" for c in unmatched_ref]
+        st.caption("⚠️ Curve di commissioning senza una misura corrispondente (stesso field size): "
+                   + "; ".join(unmatched_labels))
+
+    r1, r2 = st.columns(2)
+    with r1:
+        report_depth = st.number_input("Profondità per il controllo PDD nel report [mm]", value=100.0, min_value=0.0, step=1.0)
+    with r2:
+        report_tol = st.number_input("Tolleranza principale [%]", value=1.0, min_value=0.1, step=0.5)
+
+    if matches and st.button("📊 Genera report Excel", type="primary"):
+        with st.spinner("Generazione report in corso..."):
+            report_bytes = build_energy_report(
+                energy_label=energy_label or "Energia non specificata",
+                matches=matches,
+                gamma_dose_t=dose_t, gamma_dist_t=dist_t,
+                gamma_dose_threshold=dose_threshold, gamma_interp=int(interp),
+                pdd_depth_mm=report_depth, tolerance_pp=report_tol,
+            )
+        safe_label = "".join(c if c.isalnum() else "_" for c in (energy_label or "report"))
+        st.download_button(
+            "⬇️ Scarica report Excel",
+            data=report_bytes,
+            file_name=f"report_{safe_label}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        st.success("Report generato. Usa il pulsante sopra per scaricarlo.")
 
 else:
     st.info("Carica entrambi i file (commissioning e misura) per procedere.")
