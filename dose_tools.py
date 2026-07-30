@@ -477,6 +477,349 @@ def dose_at_depth(pdd: np.ndarray, depth_mm: float = 100.0) -> float:
 
 
 # --------------------------------------------------------------------------
+# Multi-curve ("per energy") report: matching + Excel generation
+# --------------------------------------------------------------------------
+
+def parse_field_size(fs: str):
+    """Parse a 'AxB' field-size string (any numeric precision, e.g.
+    '100x100' or '400.00x400.00') into a rounded-mm tuple usable for
+    matching, or None if it can't be parsed."""
+    if not fs:
+        return None
+    parts = fs.replace(",", ".").lower().replace(" ", "").split("x")
+    if len(parts) != 2:
+        return None
+    try:
+        a, b = float(parts[0]), float(parts[1])
+        return (round(a), round(b))
+    except ValueError:
+        return None
+
+
+def match_curves_by_field(ref_curves, eval_curves):
+    """Best-effort auto-matching of commissioning (ref) curves to
+    measurement (eval) curves sharing the same curve type (PDD/PROFILE)
+    and the same field size (parsed via ``parse_field_size``).
+
+    Returns
+    -------
+    matches : list of dict
+        Each dict has keys: label, field_size, curve_type, ref, eval.
+    unmatched_ref : list of Curve
+        Commissioning curves for which no matching measurement curve was found.
+    """
+    matches = []
+    unmatched_ref = []
+    used_eval_ids = set()
+
+    for r in ref_curves:
+        if r.curve_type not in ("PDD", "PROFILE"):
+            continue
+        r_fs = parse_field_size(r.field_size)
+        found = None
+        for e in eval_curves:
+            if id(e) in used_eval_ids:
+                continue
+            if e.curve_type != r.curve_type:
+                continue
+            e_fs = parse_field_size(e.field_size)
+            if r_fs is not None and e_fs is not None and r_fs == e_fs:
+                found = e
+                break
+        if found is not None:
+            used_eval_ids.add(id(found))
+            label = f"{r.field_size or '?'} - {r.curve_type}"
+            matches.append({
+                "label": label,
+                "field_size": r.field_size,
+                "curve_type": r.curve_type,
+                "ref": r,
+                "eval": found,
+            })
+        else:
+            unmatched_ref.append(r)
+
+    return matches, unmatched_ref
+
+
+def render_comparison_figure(ref_data: np.ndarray, eval_data: np.ndarray,
+                              gamma: np.ndarray, curve_type: str, title: str) -> bytes:
+    """Render the standard 3-panel (overlay / difference / gamma) comparison
+    figure used throughout the app, returning PNG bytes."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import io as _io
+
+    eval_on_ref = np.interp(ref_data[:, 0], eval_data[:, 0], eval_data[:, 1], left=np.nan, right=np.nan)
+    difference = ref_data[:, 1] - eval_on_ref
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 3.8))
+
+    axes[0].plot(ref_data[:, 0], ref_data[:, 1], label="Commissioning", lw=1.6)
+    axes[0].plot(eval_data[:, 0], eval_data[:, 1], label="Misura", lw=1.6, alpha=0.8)
+    axes[0].set_xlabel("Posizione [mm]")
+    axes[0].set_ylabel("Dose [%]")
+    axes[0].set_title(f"{curve_type} — Curve sovrapposte")
+    axes[0].grid(alpha=0.3)
+    axes[0].legend(fontsize=8)
+
+    axes[1].plot(ref_data[:, 0], difference, color="crimson", lw=1.3)
+    axes[1].axhline(0, color="k", lw=0.7, alpha=0.5)
+    axes[1].set_xlabel("Posizione [mm]")
+    axes[1].set_ylabel("Differenza [%]")
+    axes[1].set_title("Differenza")
+    axes[1].grid(alpha=0.3)
+
+    axes[2].plot(gamma[:, 0], gamma[:, 1], color="green", lw=1.0, marker=".", markersize=3)
+    axes[2].axhline(1, color="green", ls="--", alpha=0.5)
+    axes[2].set_xlabel("Posizione [mm]")
+    axes[2].set_ylabel("Gamma")
+    axes[2].set_title("Indice Gamma")
+    axes[2].grid(alpha=0.3)
+
+    fig.suptitle(title, fontsize=11)
+    fig.tight_layout()
+
+    buf = _io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def build_energy_report(energy_label: str,
+                         matches: list,
+                         gamma_dose_t: float = 3.0,
+                         gamma_dist_t: float = 2.0,
+                         gamma_dose_threshold: float = 0.0,
+                         gamma_interp: int = 1,
+                         pdd_depth_mm: float = 100.0,
+                         tolerance_pp: float = 1.0) -> bytes:
+    """Build an Excel (.xlsx) QA report for a set of commissioning-vs-measurement
+    curve pairs belonging to the same energy/beam, including gamma analysis,
+    PDD dose-at-depth or profile flatness/symmetry checks, comparison charts
+    and a summary sheet. Returns the workbook as bytes.
+    """
+    import io as _io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.utils import get_column_letter
+    from datetime import datetime
+
+    ARIAL = "Arial"
+    HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
+    PASS_FILL = PatternFill("solid", fgColor="C6EFCE")
+    FAIL_FILL = PatternFill("solid", fgColor="FFC7CE")
+    THIN = Side(style="thin", color="B7B7B7")
+    BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+
+    wb = Workbook()
+    ws_summary = wb.active
+    ws_summary.title = "Summary"
+
+    # -- Title --------------------------------------------------------
+    ws_summary["A1"] = f"Report QA — {energy_label}"
+    ws_summary["A1"].font = Font(name=ARIAL, size=16, bold=True)
+    ws_summary["A2"] = f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    ws_summary["A2"].font = Font(name=ARIAL, size=10, italic=True, color="666666")
+    ws_summary["A3"] = (
+        f"Parametri gamma: Dose {gamma_dose_t:g}% | DTA {gamma_dist_t:g}mm | "
+        f"Soglia {gamma_dose_threshold:g}% | Interp. {gamma_interp} | "
+        f"Tolleranza principale ±{tolerance_pp:g}%"
+    )
+    ws_summary["A3"].font = Font(name=ARIAL, size=10, color="666666")
+
+    headers = ["Field size", "Tipo", "Sorgente commissioning", "Sorgente misura",
+               "Gamma pass rate [%]", "Verifica principale", "Dettagli", "Foglio"]
+    header_row = 5
+    for col, h in enumerate(headers, start=1):
+        c = ws_summary.cell(row=header_row, column=col, value=h)
+        c.font = Font(name=ARIAL, size=10, bold=True, color="FFFFFF")
+        c.fill = HEADER_FILL
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border = BORDER
+
+    used_sheet_names = {"Summary"}
+    row = header_row + 1
+
+    for idx, m in enumerate(matches, start=1):
+        ref_curve = m["ref"]
+        eval_curve = m["eval"]
+        curve_type = m["curve_type"]
+        field_size = m["field_size"] or "?"
+
+        gamma, gamma_percent, evaluated_points = gamma_1d(
+            ref_curve.data, eval_curve.data,
+            dose_t=gamma_dose_t, dist_t=gamma_dist_t,
+            dose_threshold=gamma_dose_threshold, interp=int(gamma_interp),
+        )
+
+        # -- Sheet name (Excel: <=31 chars, unique, no []:*?/\\) --------
+        base_name = f"{field_size}_{curve_type}"[:25]
+        for bad in '[]:*?/\\':
+            base_name = base_name.replace(bad, "-")
+        sheet_name = base_name
+        suffix = 1
+        while sheet_name in used_sheet_names:
+            suffix += 1
+            sheet_name = f"{base_name}_{suffix}"[:31]
+        used_sheet_names.add(sheet_name)
+
+        title = f"{field_size} — {curve_type} ({ref_curve.source} vs {eval_curve.source})"
+        png_bytes = render_comparison_figure(ref_curve.data, eval_curve.data, gamma, curve_type, title)
+
+        ws = wb.create_sheet(sheet_name)
+        ws["A1"] = title
+        ws["A1"].font = Font(name=ARIAL, size=13, bold=True)
+
+        img_buffer = _io.BytesIO(png_bytes)
+        img = XLImage(img_buffer)
+        img.width = 900
+        img.height = 228
+        ws.add_image(img, "A3")
+
+        table_start_row = 16
+
+        # -- Metric-specific checks --------------------------------
+        main_pass = None
+        detail_text = ""
+
+        if curve_type == "PDD":
+            ref_d = dose_at_depth(ref_curve.data, pdd_depth_mm)
+            eval_d = dose_at_depth(eval_curve.data, pdd_depth_mm)
+            ws.cell(row=table_start_row, column=1, value="Parametro").font = Font(name=ARIAL, bold=True)
+            ws.cell(row=table_start_row, column=2, value="Commissioning").font = Font(name=ARIAL, bold=True)
+            ws.cell(row=table_start_row, column=3, value="Misura").font = Font(name=ARIAL, bold=True)
+            ws.cell(row=table_start_row, column=4, value="Differenza").font = Font(name=ARIAL, bold=True)
+            ws.cell(row=table_start_row, column=5, value=f"Entro ±{tolerance_pp:g}%").font = Font(name=ARIAL, bold=True)
+
+            r = table_start_row + 1
+            if np.isnan(ref_d) or np.isnan(eval_d):
+                ws.cell(row=r, column=1, value=f"Dose @ {pdd_depth_mm:g}mm")
+                ws.cell(row=r, column=2, value="N/A")
+                ws.cell(row=r, column=3, value="N/A")
+                ws.cell(row=r, column=4, value="N/A")
+                ws.cell(row=r, column=5, value="N/A")
+                detail_text = "Profondità fuori range"
+                main_pass = None
+            else:
+                diff_pp = eval_d - ref_d
+                main_pass = abs(diff_pp) <= tolerance_pp
+                ws.cell(row=r, column=1, value=f"Dose @ {pdd_depth_mm:g}mm")
+                ws.cell(row=r, column=2, value=round(ref_d, 3))
+                ws.cell(row=r, column=3, value=round(eval_d, 3))
+                ws.cell(row=r, column=4, value=f"{diff_pp:+.2f} pp")
+                cell = ws.cell(row=r, column=5, value="OK" if main_pass else "FUORI TOLL.")
+                cell.fill = PASS_FILL if main_pass else FAIL_FILL
+                detail_text = f"D{pdd_depth_mm:g}mm: {diff_pp:+.2f}pp"
+
+        else:  # PROFILE
+            try:
+                ref_metrics = profile_metrics(ref_curve.data)
+                eval_metrics = profile_metrics(eval_curve.data)
+                ref_shape = ref_metrics.pop("_shape")
+                eval_shape = eval_metrics.pop("_shape")
+
+                ws.cell(row=table_start_row, column=1, value="Parametro").font = Font(name=ARIAL, bold=True)
+                ws.cell(row=table_start_row, column=2, value="Commissioning").font = Font(name=ARIAL, bold=True)
+                ws.cell(row=table_start_row, column=3, value="Misura").font = Font(name=ARIAL, bold=True)
+                ws.cell(row=table_start_row, column=4, value="Differenza").font = Font(name=ARIAL, bold=True)
+                ws.cell(row=table_start_row, column=5, value=f"Entro ±{tolerance_pp:g}%").font = Font(name=ARIAL, bold=True)
+
+                TOLERANCE_KEYS = ("Flatness [%]", "Symmetry [%]")
+                tolerance_ok = True
+                any_checked = False
+                r = table_start_row + 1
+                for key in ref_metrics:
+                    rv, ev = ref_metrics[key], eval_metrics[key]
+                    rv_nan = isinstance(rv, float) and np.isnan(rv)
+                    ev_nan = isinstance(ev, float) and np.isnan(ev)
+                    ws.cell(row=r, column=1, value=key)
+                    if rv_nan or ev_nan:
+                        ws.cell(row=r, column=2, value="N/A")
+                        ws.cell(row=r, column=3, value="N/A")
+                        ws.cell(row=r, column=4, value="N/A")
+                        ws.cell(row=r, column=5, value="N/A")
+                    else:
+                        if key.endswith("[%]"):
+                            diff = ev - rv
+                            diff_str = f"{diff:+.2f} pp"
+                        elif key == "Center [mm]":
+                            diff = ev - rv
+                            diff_str = f"{diff:+.2f} mm"
+                        else:
+                            diff = 100.0 * (ev - rv) / rv if rv else float("nan")
+                            diff_str = f"{diff:+.2f}%"
+                        ws.cell(row=r, column=2, value=round(rv, 3))
+                        ws.cell(row=r, column=3, value=round(ev, 3))
+                        ws.cell(row=r, column=4, value=diff_str)
+                        if key in TOLERANCE_KEYS:
+                            any_checked = True
+                            ok = abs(diff) <= tolerance_pp
+                            tolerance_ok = tolerance_ok and ok
+                            cell = ws.cell(row=r, column=5, value="OK" if ok else "FUORI TOLL.")
+                            cell.fill = PASS_FILL if ok else FAIL_FILL
+                        else:
+                            ws.cell(row=r, column=5, value="—")
+                    r += 1
+
+                main_pass = tolerance_ok if any_checked else None
+                detail_text = "Flatness/Symmetry " + ("OK" if main_pass else "FUORI TOLL." if main_pass is not None else "N/A")
+
+                if ref_shape != "full" or eval_shape != "full":
+                    ws.cell(row=r + 1, column=1,
+                            value="Nota: profilo parziale rilevato — field size/flatness stimati "
+                                  "assumendo campo simmetrico; symmetry non verificabile.")
+                    ws.cell(row=r + 1, column=1).font = Font(name=ARIAL, size=9, italic=True, color="666666")
+
+            except ValueError as e:
+                ws.cell(row=table_start_row, column=1, value=f"Impossibile calcolare i parametri: {e}")
+                main_pass = None
+                detail_text = "Errore calcolo metriche"
+
+        for col in range(1, 6):
+            ws.column_dimensions[get_column_letter(col)].width = 20
+
+        # -- Summary row --------------------------------------------
+        ws_summary.cell(row=row, column=1, value=field_size)
+        ws_summary.cell(row=row, column=2, value=curve_type)
+        ws_summary.cell(row=row, column=3, value=ref_curve.source)
+        ws_summary.cell(row=row, column=4, value=eval_curve.source)
+        ws_summary.cell(row=row, column=5, value=round(gamma_percent, 1) if not np.isnan(gamma_percent) else "N/A")
+        verdict_cell = ws_summary.cell(
+            row=row, column=6,
+            value="N/A" if main_pass is None else ("OK" if main_pass else "FUORI TOLL.")
+        )
+        if main_pass is True:
+            verdict_cell.fill = PASS_FILL
+        elif main_pass is False:
+            verdict_cell.fill = FAIL_FILL
+        ws_summary.cell(row=row, column=7, value=detail_text)
+        link_cell = ws_summary.cell(row=row, column=8, value=sheet_name)
+        link_cell.hyperlink = f"#'{sheet_name}'!A1"
+        link_cell.font = Font(name=ARIAL, color="0563C1", underline="single")
+
+        for col in range(1, 9):
+            cell = ws_summary.cell(row=row, column=col)
+            if cell.font is None or cell.font.name != ARIAL:
+                cell.font = Font(name=ARIAL)
+            cell.border = BORDER
+
+        row += 1
+
+    col_widths = [14, 10, 24, 24, 16, 16, 28, 16]
+    for col, w in enumerate(col_widths, start=1):
+        ws_summary.column_dimensions[get_column_letter(col)].width = w
+
+    out = _io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out.getvalue()
+
+
+# --------------------------------------------------------------------------
 # Profile metrics: flatness, symmetry, penumbra
 # --------------------------------------------------------------------------
 
