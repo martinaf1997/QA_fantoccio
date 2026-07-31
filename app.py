@@ -75,7 +75,7 @@ if "measurement_curves" not in st.session_state:
 col_up1, col_up2 = st.columns(2)
 
 with col_up1:
-    st.subheader("1️⃣ Commissioning / TPS")
+    st.subheader("1) Commissioning / TPS")
     commissioning_files = st.file_uploader(
         "Reference files: measured commissioning (w2CAD .data, measured bulk) "
         "and/or TPS-calculated curves (bulk `_calculated`, e.g. Acuros/AAA) — can be mixed",
@@ -110,7 +110,7 @@ with col_up1:
         st.session_state.commissioning_curves = []
 
 with col_up2:
-    st.subheader("2️⃣ Measurement (.mcc)")
+    st.subheader("2) Measurement (.mcc)")
     measurement_files = st.file_uploader(
         "Measurement files (PTW)", type=["mcc"],
         key="measurement_upload", accept_multiple_files=True,
@@ -140,7 +140,7 @@ ref_curves: list[Curve] = st.session_state.commissioning_curves
 eval_curves: list[Curve] = st.session_state.measurement_curves
 
 if ref_curves and eval_curves:
-    st.subheader("3️⃣ Select the curves to compare")
+    st.subheader("3) Select the curves to compare")
 
     col_sel1, col_sel2 = st.columns(2)
     with col_sel1:
@@ -175,7 +175,7 @@ if ref_curves and eval_curves:
     # ------------------------------------------------------------
     # Gamma parameters
     # ------------------------------------------------------------
-    st.subheader("4️⃣ Gamma analysis parameters")
+    st.subheader("4) Gamma analysis parameters")
     g1, g2, g3, g4 = st.columns(4)
     with g1:
         dose_t = st.number_input("Dose [%]", value=2.0, min_value=0.1, step=0.5)
@@ -401,7 +401,7 @@ if ref_curves and eval_curves:
     # Per-energy report: all curves (PDD + profiles) of the same beam
     # --------------------------------------------------------------------
     st.divider()
-    st.subheader("5️⃣ PDF report per energy")
+    st.subheader("5) PDF report per energy")
     st.caption(
         "Generate a PDF report with charts and tables for **all** the loaded curves "
         "(PDD and profiles), automatically matching commissioning and measurement by "
@@ -420,13 +420,15 @@ if ref_curves and eval_curves:
                 "Field size": m["field_size"],
                 "Depth [mm]": (f"{m['depth_mm']:g}" if m.get("depth_mm") is not None else "—"),
                 "Type": m["curve_type"],
+                "Origin": (m.get("origin") or "—").capitalize(),
                 "Commissioning": m["ref"].source,
                 "Measurement": m["eval"].source,
             }
             for m in matches
         ]
         st.write(f"**{len(matches)} pair(s) automatically matched by field size "
-                 "(and depth, for profiles):**")
+                 "(and depth, for profiles). Measured and TPS-calculated reference curves "
+                 "for the same field are both included as separate rows when available:**")
         st.dataframe(preview_rows, use_container_width=True, hide_index=True)
     else:
         st.warning("No commissioning/measurement pair with a matching field size was found.")
