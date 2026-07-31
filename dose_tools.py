@@ -774,7 +774,6 @@ def render_cumulative_figure(matches: list, curve_type: str, title: str) -> byte
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    import matplotlib.cm as cm
     import io as _io
 
     subset = [m for m in matches if m["curve_type"] == curve_type]
@@ -782,7 +781,9 @@ def render_cumulative_figure(matches: list, curve_type: str, title: str) -> byte
         return None
 
     fig, ax = plt.subplots(figsize=(11, 5.5))
-    cmap = cm.get_cmap("tab10") if len(subset) <= 10 else cm.get_cmap("tab20")
+    # matplotlib.cm.get_cmap() was removed in matplotlib >=3.9; the
+    # `matplotlib.colormaps[...]` mapping is the current stable API.
+    cmap = matplotlib.colormaps["tab10"] if len(subset) <= 10 else matplotlib.colormaps["tab20"]
 
     for i, m in enumerate(subset):
         color = cmap(i % cmap.N)
