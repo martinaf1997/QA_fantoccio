@@ -178,13 +178,13 @@ if ref_curves and eval_curves:
     st.subheader("4️⃣ Parametri analisi gamma")
     g1, g2, g3, g4 = st.columns(4)
     with g1:
-        dose_t = st.number_input("Dose [%]", value=3.0, min_value=0.1, step=0.5)
+        dose_t = st.number_input("Dose [%]", value=2.0, min_value=0.1, step=0.5)
     with g2:
         dist_t = st.number_input("DTA [mm]", value=2.0, min_value=0.1, step=0.5)
     with g3:
         dose_threshold = st.number_input("Soglia dose [%]", value=0.0, min_value=0.0, step=1.0)
     with g4:
-        interp = st.number_input("Punti interpolati", value=1, min_value=0, step=1)
+        interp = st.number_input("Punti interpolati", value=5, min_value=0, step=1)
 
     run = st.button("▶️ Esegui analisi", type="primary")
 
