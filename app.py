@@ -75,7 +75,7 @@ if "measurement_curves" not in st.session_state:
 col_up1, col_up2 = st.columns(2)
 
 with col_up1:
-    st.subheader("1️⃣ Commissioning / TPS")
+    st.subheader("1️) Commissioning / TPS")
     commissioning_files = st.file_uploader(
         "File di riferimento: commissioning misurato (w2CAD .data, bulk misurato) "
         "e/o curve calcolate dal TPS (bulk `_calculated`, es. Acuros/AAA) — anche insieme",
@@ -110,7 +110,7 @@ with col_up1:
         st.session_state.commissioning_curves = []
 
 with col_up2:
-    st.subheader("2️⃣ Misura (.mcc)")
+    st.subheader("2) Misura (.mcc)")
     measurement_files = st.file_uploader(
         "File di misura (PTW)", type=["mcc"],
         key="measurement_upload", accept_multiple_files=True,
@@ -140,7 +140,7 @@ ref_curves: list[Curve] = st.session_state.commissioning_curves
 eval_curves: list[Curve] = st.session_state.measurement_curves
 
 if ref_curves and eval_curves:
-    st.subheader("3️⃣ Seleziona le curve da confrontare")
+    st.subheader("3) Seleziona le curve da confrontare")
 
     col_sel1, col_sel2 = st.columns(2)
     with col_sel1:
@@ -175,7 +175,7 @@ if ref_curves and eval_curves:
     # ------------------------------------------------------------
     # Gamma parameters
     # ------------------------------------------------------------
-    st.subheader("4️⃣ Parametri analisi gamma")
+    st.subheader("4) Parametri analisi gamma")
     g1, g2, g3, g4 = st.columns(4)
     with g1:
         dose_t = st.number_input("Dose [%]", value=2.0, min_value=0.1, step=0.5)
@@ -401,7 +401,7 @@ if ref_curves and eval_curves:
     # Report per energia: tutte le curve (PDD + profili) di uno stesso fascio
     # --------------------------------------------------------------------
     st.divider()
-    st.subheader("5️⃣ Report PDF per energia")
+    st.subheader("5) Report PDF per energia")
     st.caption(
         "Genera un report PDF con grafici e tabelle per **tutte** le curve caricate "
         "(PDD e profili), abbinando automaticamente commissioning e misura per field size. "
