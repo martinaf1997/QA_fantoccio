@@ -644,7 +644,7 @@ def dose_at_depth(pdd: np.ndarray, depth_mm: float = 100.0) -> float:
 
 
 # --------------------------------------------------------------------------
-# Multi-curve ("per energy") report: matching + pdf generation
+# Multi-curve ("per energy") report: matching + PDF generation
 # --------------------------------------------------------------------------
 
 def parse_field_size(fs: str):
@@ -675,6 +675,12 @@ def match_curves_by_field(ref_curves, eval_curves, depth_tolerance_mm: float = 0
     alone could silently pair the wrong depth. If depth metadata is
     missing on either side, matching falls back to field size only.
 
+    Measured CROSSPLANE profile curves (i.e. from the measurement/.mcc
+    side) are excluded from auto-matching entirely -- they are never
+    considered as candidates, so the corresponding commissioning curve
+    (if any) is reported as unmatched rather than paired with a
+    crossplane measurement.
+
     Returns
     -------
     matches : list of dict
@@ -696,6 +702,9 @@ def match_curves_by_field(ref_curves, eval_curves, depth_tolerance_mm: float = 0
             if id(e) in used_eval_ids:
                 continue
             if e.curve_type != r.curve_type:
+                continue
+            # Exclude measured CROSSPLANE profiles from auto-matching.
+            if e.curve_type == "PROFILE" and e.direction == "CROSSPLANE":
                 continue
             e_fs = parse_field_size(e.field_size)
             if r_fs is None or e_fs is None or r_fs != e_fs:
@@ -751,27 +760,27 @@ def render_comparison_figure(ref_data: np.ndarray, eval_data: np.ndarray,
     fig, axes = plt.subplots(1, 3, figsize=(13, 7))
 
     axes[0].plot(ref_data[:, 0], ref_data[:, 1], label="Commissioning", lw=2.0)
-    axes[0].plot(eval_data[:, 0], eval_data[:, 1], label="Misura", lw=2.0, alpha=0.8)
-    axes[0].set_xlabel("Posizione [mm]", fontsize=11)
+    axes[0].plot(eval_data[:, 0], eval_data[:, 1], label="Measurement", lw=2.0, alpha=0.8)
+    axes[0].set_xlabel("Position [mm]", fontsize=11)
     axes[0].set_ylabel("Dose [%]", fontsize=11)
-    axes[0].set_title(f"{curve_type} — Curve sovrapposte", fontsize=12)
+    axes[0].set_title(f"{curve_type} — Overlaid curves", fontsize=12)
     axes[0].grid(alpha=0.3)
     axes[0].tick_params(labelsize=9)
     axes[0].legend(fontsize=10)
 
     axes[1].plot(ref_data[:, 0], difference, color="crimson", lw=1.8)
     axes[1].axhline(0, color="k", lw=0.8, alpha=0.5)
-    axes[1].set_xlabel("Posizione [mm]", fontsize=11)
-    axes[1].set_ylabel("Differenza [%]", fontsize=11)
-    axes[1].set_title("Differenza", fontsize=12)
+    axes[1].set_xlabel("Position [mm]", fontsize=11)
+    axes[1].set_ylabel("Difference [%]", fontsize=11)
+    axes[1].set_title("Difference", fontsize=12)
     axes[1].grid(alpha=0.3)
     axes[1].tick_params(labelsize=9)
 
     axes[2].plot(gamma[:, 0], gamma[:, 1], color="green", lw=1.4, marker=".", markersize=4)
     axes[2].axhline(1, color="green", ls="--", alpha=0.5)
-    axes[2].set_xlabel("Posizione [mm]", fontsize=11)
+    axes[2].set_xlabel("Position [mm]", fontsize=11)
     axes[2].set_ylabel("Gamma", fontsize=11)
-    axes[2].set_title("Indice Gamma", fontsize=12)
+    axes[2].set_title("Gamma Index", fontsize=12)
     axes[2].grid(alpha=0.3)
     axes[2].tick_params(labelsize=9)
 
@@ -810,17 +819,17 @@ def render_cumulative_figure(matches: list, curve_type: str, title: str) -> byte
         ev = m["eval"].data
         depth_mm = m.get("depth_mm")
         if curve_type == "PROFILE" and depth_mm is not None:
-            label = f"{m['field_size'] or f'curva {i + 1}'} @ {depth_mm:g}mm"
+            label = f"{m['field_size'] or f'curve {i + 1}'} @ {depth_mm:g}mm"
         else:
-            label = m["field_size"] or f"curva {i + 1}"
+            label = m["field_size"] or f"curve {i + 1}"
         ax.plot(ref[:, 0], ref[:, 1], color=color, lw=1.6, linestyle="-", label=label)
         ax.plot(ev[:, 0], ev[:, 1], color=color, lw=1.3, linestyle="--")
 
-    ax.set_xlabel("Posizione [mm]")
+    ax.set_xlabel("Position [mm]")
     ax.set_ylabel("Dose [%]")
     ax.set_title(title)
     ax.grid(alpha=0.3)
-    ax.legend(title="Field size (— commissioning / -- misura)", fontsize=8,
+    ax.legend(title="Field size (— commissioning / -- measurement)", fontsize=8,
               ncol=2 if len(subset) > 5 else 1, loc="best")
     fig.tight_layout()
 
@@ -893,12 +902,12 @@ def build_energy_report_pdf(energy_label: str,
     story = []
 
     # -- Cover / header -------------------------------------------------
-    story.append(Paragraph(f"Report QA — {energy_label}", title_style))
-    story.append(Paragraph(f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", meta_style))
+    story.append(Paragraph(f"QA Report — {energy_label}", title_style))
+    story.append(Paragraph(f"Generated on {datetime.now().strftime('%d/%m/%Y %H:%M')}", meta_style))
     story.append(Paragraph(
-        f"Parametri analisi gamma: Dose {gamma_dose_t:g}% | DTA {gamma_dist_t:g}mm | "
-        f"Soglia {gamma_dose_threshold:g}% | Interp. {gamma_interp} | "
-        f"Tolleranza ±{tolerance_pp:g}%", meta_style))
+        f"Gamma parameters: Dose {gamma_dose_t:g}% | DTA {gamma_dist_t:g}mm | "
+        f"Threshold {gamma_dose_threshold:g}% | Interp. {gamma_interp} | "
+        f"Main tolerance ±{tolerance_pp:g}%", meta_style))
     story.append(Spacer(1, 10))
 
     # -- Precompute gamma / metrics for every match ----------------------
@@ -925,7 +934,7 @@ def build_energy_report_pdf(energy_label: str,
             ref_d = dose_at_depth(ref_curve.data, pdd_depth_mm)
             eval_d = dose_at_depth(eval_curve.data, pdd_depth_mm)
             if np.isnan(ref_d) or np.isnan(eval_d):
-                detail_text = "Profondità fuori range"
+                detail_text = "Depth out of range"
                 metric_rows = [(f"Dose @ {pdd_depth_mm:g}mm", "N/A", "N/A", "N/A", None)]
             else:
                 diff_pp = eval_d - ref_d
@@ -969,12 +978,12 @@ def build_energy_report_pdf(energy_label: str,
 
                 main_pass = tolerance_ok if any_checked else None
                 detail_text = "Flatness/Symmetry " + (
-                    "OK" if main_pass else "FUORI TOLL." if main_pass is not None else "N/A")
+                    "OK" if main_pass else "OUT OF TOL." if main_pass is not None else "N/A")
                 if ref_shape != "full" or eval_shape != "full":
-                    detail_text += " (profilo parziale)"
+                    detail_text += " (partial profile)"
             except ValueError as e:
-                metric_rows = [(f"Errore: {e}", "", "", "", None)]
-                detail_text = "Errore calcolo metriche"
+                metric_rows = [(f"Error: {e}", "", "", "", None)]
+                detail_text = "Error computing metrics"
 
         results.append({
             "field_size": field_size, "display_label": display_label, "curve_type": curve_type,
@@ -988,12 +997,12 @@ def build_energy_report_pdf(energy_label: str,
     # Every cell is wrapped in a Paragraph so long filenames/labels wrap
     # onto multiple lines within their column instead of overlapping
     # neighbouring cells.
-    story.append(Paragraph("Riepilogo", h2_style))
-    header_cells = ["Field size", "Tipo", "Commissioning", "Misura", "Gamma [%]", "Verifica", "Dettagli"]
+    story.append(Paragraph("Summary", h2_style))
+    header_cells = ["Field size", "Type", "Commissioning", "Measurement", "Gamma [%]", "Verdict", "Details"]
     table_data = [[_cell(h, cell_header_style) for h in header_cells]]
     row_colors = []
     for res in results:
-        verdict_str = "N/A" if res["main_pass"] is None else ("OK" if res["main_pass"] else "FUORI TOLL.")
+        verdict_str = "N/A" if res["main_pass"] is None else ("OK" if res["main_pass"] else "OUT OF TOL.")
         gp = res["gamma_percent"]
         gp_str = "N/A" if np.isnan(gp) else f"{gp:.1f}"
         table_data.append([
@@ -1028,18 +1037,18 @@ def build_energy_report_pdf(energy_label: str,
     story.append(summary_table)
 
     # -- Cumulative overview charts ---------------------------------------
-    cum_pdd_png = render_cumulative_figure(matches, "PDD", f"{energy_label} — Tutti i campi PDD")
-    cum_profile_png = render_cumulative_figure(matches, "PROFILE", f"{energy_label} — Tutti i campi Profili")
+    cum_pdd_png = render_cumulative_figure(matches, "PDD", f"{energy_label} — All PDD field sizes")
+    cum_profile_png = render_cumulative_figure(matches, "PROFILE", f"{energy_label} — All profile field sizes")
 
     if cum_pdd_png or cum_profile_png:
         story.append(PageBreak())
-        story.append(Paragraph("Grafici cumulativi (tutti i campi)", h2_style))
+        story.append(Paragraph("Cumulative charts (all field sizes)", h2_style))
         if cum_pdd_png:
-            story.append(Paragraph("PDD — tutti i field size", h3_style))
+            story.append(Paragraph("PDD — all field sizes", h3_style))
             story.append(_png_flowable(cum_pdd_png, content_width))
             story.append(Spacer(1, 8))
         if cum_profile_png:
-            story.append(Paragraph("Profili — tutti i field size", h3_style))
+            story.append(Paragraph("Profiles — all field sizes", h3_style))
             story.append(_png_flowable(cum_profile_png, content_width))
 
     # -- Per-field-size sections (large chart, minimal wasted space) --------
@@ -1050,7 +1059,7 @@ def build_energy_report_pdf(energy_label: str,
         title = f"{res['display_label']} — {res['curve_type']}"
         story.append(Paragraph(title, h2_style))
         story.append(Paragraph(
-            f"Commissioning: {res['ref_curve'].source} — Misura: {res['eval_curve'].source}", meta_style))
+            f"Commissioning: {res['ref_curve'].source} — Measurement: {res['eval_curve'].source}", meta_style))
         story.append(Spacer(1, 4))
 
         gp = res["gamma_percent"]
@@ -1058,9 +1067,9 @@ def build_energy_report_pdf(energy_label: str,
         gp_ok = (not np.isnan(gp)) and gp >= 95.0
         gp_color_hex = "#2E7D32" if gp_ok else "#C62828"
         story.append(Paragraph(
-            f'Indice Gamma ({gamma_dose_t:g}%/{gamma_dist_t:g}mm): '
+            f'Gamma Index ({gamma_dose_t:g}%/{gamma_dist_t:g}mm): '
             f'<font color="{gp_color_hex}"><b>{gp_str}</b></font> '
-            f'({res["evaluated_points"]} punti valutati)',
+            f'({res["evaluated_points"]} points evaluated)',
             gamma_result_style))
         story.append(Spacer(1, 4))
 
@@ -1070,11 +1079,11 @@ def build_energy_report_pdf(energy_label: str,
         story.append(_png_flowable(png_bytes, content_width))
         story.append(Spacer(1, 10))
 
-        mt_header = ["Parametro", "Commissioning", "Misura", "Differenza", f"Entro ±{tolerance_pp:g}%"]
+        mt_header = ["Parameter", "Commissioning", "Measurement", "Difference", f"Within ±{tolerance_pp:g}%"]
         mt_data = [[_cell(h, mcell_header_style) for h in mt_header]]
         mt_verdicts = []
         for param, rv, ev, diff_str, verdict in res["metric_rows"]:
-            verdict_str = "—" if verdict is None else ("OK" if verdict else "FUORI TOLL.")
+            verdict_str = "—" if verdict is None else ("OK" if verdict else "OUT OF TOL.")
             mt_data.append([_cell(param, mcell_style), _cell(rv, mcell_style), _cell(ev, mcell_style),
                              _cell(diff_str, mcell_style), _cell(verdict_str, mcell_style)])
             mt_verdicts.append(verdict)
@@ -1095,23 +1104,23 @@ def build_energy_report_pdf(energy_label: str,
         mt.setStyle(mts)
         story.append(mt)
 
-        if "profilo parziale" in res["detail_text"]:
+        if "partial profile" in res["detail_text"]:
             story.append(Spacer(1, 6))
             story.append(Paragraph(
-                "Nota: profilo parziale rilevato — field size/flatness stimati assumendo campo "
-                "simmetrico; symmetry non verificabile.", note_style))
+                "Note: a partial profile was detected — field size/flatness are estimated "
+                "assuming a symmetric field; symmetry cannot be verified.", note_style))
 
     # -- Approval / signature block -----------------------------------------
     story.append(PageBreak())
-    story.append(Paragraph("Approvazione", h2_style))
+    story.append(Paragraph("Approval", h2_style))
     story.append(Spacer(1, 30))
 
     sign_label_style = ParagraphStyle("SignLabelX", parent=styles["Normal"], fontSize=11)
     physicist_line = physicist_name if physicist_name else ""
     approval_table = Table(
         [
-            [Paragraph("Data:", sign_label_style), ""],
-            [Paragraph("Firma dello Specialista in Fisica Medica:", sign_label_style),
+            [Paragraph("Date:", sign_label_style), ""],
+            [Paragraph("Medical Physicist Signature:", sign_label_style),
              Paragraph(physicist_line, sign_label_style)],
         ],
         colWidths=[75 * mm, 95 * mm],
@@ -1126,7 +1135,7 @@ def build_energy_report_pdf(energy_label: str,
     story.append(approval_table)
 
     # -- Page header (logo) and footer (title + page numbers) on every page --
-    footer_title = f"Report QA - {energy_label}"
+    footer_title = f"QA Report - {energy_label}"
 
     def _draw_header_footer(canvas: Canvas, doc):
         width, height = A4
@@ -1146,14 +1155,14 @@ def build_energy_report_pdf(energy_label: str,
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(colors.HexColor("#666666"))
         canvas.drawString(18 * mm, 10 * mm, footer_title)
-        canvas.drawRightString(width - 18 * mm, 10 * mm, f"Pagina {canvas.getPageNumber()}")
+        canvas.drawRightString(width - 18 * mm, 10 * mm, f"Page {canvas.getPageNumber()}")
         canvas.restoreState()
 
     buf = _io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=18 * mm, rightMargin=18 * mm, topMargin=TOP_MARGIN, bottomMargin=16 * mm,
-        title=f"Report QA - {energy_label}",
+        title=f"QA Report - {energy_label}",
     )
     doc.build(story, onFirstPage=_draw_header_footer, onLaterPages=_draw_header_footer)
     buf.seek(0)
