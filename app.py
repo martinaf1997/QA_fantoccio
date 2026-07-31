@@ -29,11 +29,12 @@ st.set_page_config(page_title="Relative Dose 1D - Commissioning QA", layout="wid
 
 st.title("Relative Dose 1D — Commissioning vs Measurement QA")
 st.caption(
-    "Carica uno o più file di **commissioning** (formato w2CAD, `.data`) e uno o più "
-    "file di **misura** (formato PTW, `.mcc`). Tutte le curve trovate nei file caricati "
-    "vengono raccolte in un unico elenco da cui scegliere cosa confrontare. Il confronto "
-    "include l'analisi gamma (PDD e profili) e, solo per i profili, flatness / symmetry / "
-    "penombra con verifica di tolleranza ±1%."
+    "Carica uno o più file di **commissioning** (formato w2CAD `.data`, oppure export "
+    "**bulk multi-campo** del TPS senza estensione, con tutti i field size in un unico "
+    "file) e uno o più file di **misura** (formato PTW `.mcc`). Tutte le curve trovate nei "
+    "file caricati vengono raccolte in un unico elenco da cui scegliere cosa confrontare. "
+    "Il confronto include l'analisi gamma (PDD e profili) e, solo per i profili, "
+    "flatness / symmetry / penombra con verifica di tolleranza ±1%."
 )
 
 # --------------------------------------------------------------------
@@ -51,9 +52,10 @@ if "measurement_curves" not in st.session_state:
 col_up1, col_up2 = st.columns(2)
 
 with col_up1:
-    st.subheader("1️⃣ Commissioning (.data)")
+    st.subheader("1️⃣ Commissioning")
     commissioning_files = st.file_uploader(
-        "File di commissioning (w2CAD)", type=["data", "dat", "txt"],
+        "File di commissioning (w2CAD .data, oppure export bulk multi-campo senza estensione)",
+        type=None,
         key="commissioning_upload", accept_multiple_files=True,
     )
     if commissioning_files:
@@ -382,13 +384,15 @@ if ref_curves and eval_curves:
         preview_rows = [
             {
                 "Field size": m["field_size"],
+                "Profondità [mm]": (f"{m['depth_mm']:g}" if m.get("depth_mm") is not None else "—"),
                 "Tipo": m["curve_type"],
                 "Commissioning": m["ref"].source,
                 "Misura": m["eval"].source,
             }
             for m in matches
         ]
-        st.write(f"**{len(matches)} coppia/e abbinata/e automaticamente per field size:**")
+        st.write(f"**{len(matches)} coppia/e abbinata/e automaticamente per field size "
+                 "(e profondità, per i profili):**")
         st.dataframe(preview_rows, use_container_width=True, hide_index=True)
     else:
         st.warning("Nessuna coppia commissioning/misura con field size corrispondente trovata.")
@@ -434,7 +438,14 @@ with st.expander("ℹ️ Informazioni sui formati supportati"):
   `BEGIN_SCAN_DATA ... END_SCAN_DATA`, con metadati `SCAN_CURVETYPE`,
   `SCAN_DEPTH`, `FIELD_INPLANE`/`FIELD_CROSSPLANE` e i dati numerici tra
   `BEGIN_DATA` e `END_DATA`.
+- **Export bulk multi-campo (TPS, di solito senza estensione)** — un
+  singolo file di commissioning con **tutti i field size** in un'unica
+  matrice: colonne = field size (mm), righe = profondità (PDD) o
+  distanza off-axis (profili). Per i profili il file può contenere più
+  blocchi, uno per ciascuna profondità di misura (`Curves at depth [mm]: ...`).
+  Riconosciuto automaticamente dal contenuto (non serve l'estensione).
 - Un singolo file può contenere **più curve** (campi/profondità/direzioni
-  diverse): seleziona quella desiderata dai menu a tendina sopra.
+  diverse): seleziona quella desiderata dai menu a tendina sopra, oppure
+  usa il report per energia per includerle tutte insieme.
         """
     )
