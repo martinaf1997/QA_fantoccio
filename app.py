@@ -408,6 +408,18 @@ if ref_curves and eval_curves:
     with r2:
         report_tol = st.number_input("Tolleranza principale [%]", value=1.0, min_value=0.1, step=0.5)
 
+    r3, r4 = st.columns(2)
+    with r3:
+        logo_file = st.file_uploader(
+            "Logo (opzionale, comparirà in alto su ogni pagina)",
+            type=["png", "jpg", "jpeg"], key="logo_upload",
+        )
+    with r4:
+        physicist_name = st.text_input(
+            "Nome specialista in Fisica Medica (opzionale)", value="",
+            help="Se compilato, viene riportato accanto alla riga della firma nel report.",
+        )
+
     if matches and st.button("📄 Genera report PDF", type="primary"):
         with st.spinner("Generazione report in corso..."):
             report_bytes = build_energy_report_pdf(
@@ -416,6 +428,8 @@ if ref_curves and eval_curves:
                 gamma_dose_t=dose_t, gamma_dist_t=dist_t,
                 gamma_dose_threshold=dose_threshold, gamma_interp=int(interp),
                 pdd_depth_mm=report_depth, tolerance_pp=report_tol,
+                logo_bytes=logo_file.getvalue() if logo_file is not None else None,
+                physicist_name=physicist_name,
             )
         safe_label = "".join(c if c.isalnum() else "_" for c in (energy_label or "report"))
         st.download_button(
