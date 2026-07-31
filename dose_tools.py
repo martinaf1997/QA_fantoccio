@@ -979,7 +979,7 @@ def build_energy_report_pdf(energy_label: str,
         results.append({
             "field_size": field_size, "display_label": display_label, "curve_type": curve_type,
             "ref_curve": ref_curve, "eval_curve": eval_curve,
-            "gamma": gamma, "gamma_percent": gamma_percent,
+            "gamma": gamma, "gamma_percent": gamma_percent, "evaluated_points": evaluated_points,
             "main_pass": main_pass, "detail_text": detail_text,
             "metric_rows": metric_rows,
         })
@@ -1043,13 +1043,26 @@ def build_energy_report_pdf(energy_label: str,
             story.append(_png_flowable(cum_profile_png, content_width))
 
     # -- Per-field-size sections (large chart, minimal wasted space) --------
+    gamma_result_style = ParagraphStyle("GammaResultX", parent=styles["Normal"], fontSize=10.5, spaceAfter=4)
+
     for res in results:
         story.append(PageBreak())
         title = f"{res['display_label']} — {res['curve_type']}"
         story.append(Paragraph(title, h2_style))
         story.append(Paragraph(
             f"Commissioning: {res['ref_curve'].source} — Misura: {res['eval_curve'].source}", meta_style))
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 4))
+
+        gp = res["gamma_percent"]
+        gp_str = "N/A" if np.isnan(gp) else f"{gp:.1f}%"
+        gp_ok = (not np.isnan(gp)) and gp >= 95.0
+        gp_color_hex = "#2E7D32" if gp_ok else "#C62828"
+        story.append(Paragraph(
+            f'Indice Gamma ({gamma_dose_t:g}%/{gamma_dist_t:g}mm): '
+            f'<font color="{gp_color_hex}"><b>{gp_str}</b></font> '
+            f'({res["evaluated_points"]} punti valutati)',
+            gamma_result_style))
+        story.append(Spacer(1, 4))
 
         fig_title = f"{res['display_label']} — {res['curve_type']}"
         png_bytes = render_comparison_figure(res["ref_curve"].data, res["eval_curve"].data,
@@ -1112,7 +1125,9 @@ def build_energy_report_pdf(energy_label: str,
     ]))
     story.append(approval_table)
 
-    # -- Page header (logo) and footer (page numbers) on every page --------
+    # -- Page header (logo) and footer (title + page numbers) on every page --
+    footer_title = f"Report QA - {energy_label}"
+
     def _draw_header_footer(canvas: Canvas, doc):
         width, height = A4
         canvas.saveState()
@@ -1123,13 +1138,14 @@ def build_energy_report_pdf(energy_label: str,
                 iw, ih = img_reader.getSize()
                 logo_h = 16 * mm
                 logo_w = logo_h * (iw / ih)
-                canvas.drawImage(img_reader, 18 * mm, height - 12 * mm - logo_h,
+                canvas.drawImage(img_reader, (width - logo_w) / 2, height - 12 * mm - logo_h,
                                   width=logo_w, height=logo_h, mask="auto", preserveAspectRatio=True)
             except Exception:
                 pass
 
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(colors.HexColor("#666666"))
+        canvas.drawString(18 * mm, 10 * mm, footer_title)
         canvas.drawRightString(width - 18 * mm, 10 * mm, f"Pagina {canvas.getPageNumber()}")
         canvas.restoreState()
 
