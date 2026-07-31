@@ -444,9 +444,7 @@ if ref_curves and eval_curves:
 
     r3, r4 = st.columns(2)
     with r3:
-        if FIXED_LOGO_BYTES:
-            st.success("✅ Logo trovato in `assets/` — verrà incluso automaticamente in ogni pagina del report.")
-        else:
+        if not FIXED_LOGO_BYTES:
             st.caption(
                 "ℹ️ Nessun logo trovato. Per includerlo nel report, aggiungi un file "
                 "`logo.png` (o `.jpg`/`.jpeg`) nella cartella `assets/` accanto ad `app.py` "
