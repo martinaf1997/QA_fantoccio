@@ -150,7 +150,7 @@ if ref_curves and eval_curves:
     with g3:
         dose_threshold = st.number_input("Soglia dose [%]", value=0.0, min_value=0.0, step=1.0)
     with g4:
-        interp = st.number_input("Punti interpolati", value=1, min_value=0, step=1)
+        interp = st.number_input("Punti interpolati", value=5, min_value=0, step=1)
 
     run = st.button("▶️ Esegui analisi", type="primary")
 
