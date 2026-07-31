@@ -934,6 +934,21 @@ def build_energy_report_pdf(energy_label: str,
     story.append(Spacer(1, 10))
 
     # -- Precompute gamma / metrics for every match ----------------------
+    # Order: all PDDs first, then all profiles, each group sorted by field
+    # size (profiles further sorted by depth within the same field size).
+    def _field_size_sort_key(fs_str):
+        parsed = parse_field_size(fs_str)
+        return parsed if parsed is not None else (float("inf"), float("inf"))
+
+    matches = sorted(
+        matches,
+        key=lambda m: (
+            0 if m["curve_type"] == "PDD" else 1,
+            _field_size_sort_key(m["field_size"]),
+            m.get("depth_mm") if m.get("depth_mm") is not None else -1,
+        ),
+    )
+
     results = []
     for m in matches:
         ref_curve = m["ref"]
