@@ -644,7 +644,7 @@ def dose_at_depth(pdd: np.ndarray, depth_mm: float = 100.0) -> float:
 
 
 # --------------------------------------------------------------------------
-# Multi-curve ("per energy") report: matching + Excel generation
+# Multi-curve ("per energy") report: matching + pdf generation
 # --------------------------------------------------------------------------
 
 def parse_field_size(fs: str):
@@ -896,9 +896,9 @@ def build_energy_report_pdf(energy_label: str,
     story.append(Paragraph(f"Report QA — {energy_label}", title_style))
     story.append(Paragraph(f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", meta_style))
     story.append(Paragraph(
-        f"Parametri gamma: Dose {gamma_dose_t:g}% | DTA {gamma_dist_t:g}mm | "
+        f"Parametri analisi gamma: Dose {gamma_dose_t:g}% | DTA {gamma_dist_t:g}mm | "
         f"Soglia {gamma_dose_threshold:g}% | Interp. {gamma_interp} | "
-        f"Tolleranza principale ±{tolerance_pp:g}%", meta_style))
+        f"Tolleranza ±{tolerance_pp:g}%", meta_style))
     story.append(Spacer(1, 10))
 
     # -- Precompute gamma / metrics for every match ----------------------
