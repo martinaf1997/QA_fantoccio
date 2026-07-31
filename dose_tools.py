@@ -681,16 +681,24 @@ def match_curves_by_field(ref_curves, eval_curves, depth_tolerance_mm: float = 0
     (if any) is reported as unmatched rather than paired with a
     crossplane measurement.
 
+    If BOTH a measured commissioning curve and a TPS-calculated curve
+    exist for the same field size (and depth, for profiles), both are
+    matched against the same measurement curve as separate rows (rather
+    than one silently winning based on upload order) -- the matched
+    eval curve is only "claimed" per reference origin, so a measured
+    and a calculated reference curve can each match it independently.
+
     Returns
     -------
     matches : list of dict
-        Each dict has keys: label, field_size, curve_type, ref, eval.
+        Each dict has keys: label, field_size, curve_type, depth_mm,
+        origin, algorithm, ref, eval.
     unmatched_ref : list of Curve
         Commissioning curves for which no matching measurement curve was found.
     """
     matches = []
     unmatched_ref = []
-    used_eval_ids = set()
+    used_eval_keys = set()  # (id(eval_curve), ref.origin)
 
     for r in ref_curves:
         if r.curve_type not in ("PDD", "PROFILE"):
@@ -699,7 +707,7 @@ def match_curves_by_field(ref_curves, eval_curves, depth_tolerance_mm: float = 0
 
         candidates = []
         for e in eval_curves:
-            if id(e) in used_eval_ids:
+            if (id(e), r.origin) in used_eval_keys:
                 continue
             if e.curve_type != r.curve_type:
                 continue
@@ -726,14 +734,22 @@ def match_curves_by_field(ref_curves, eval_curves, depth_tolerance_mm: float = 0
             found = candidates[0]
 
         if found is not None:
-            used_eval_ids.add(id(found))
+            used_eval_keys.add((id(found), r.origin))
             depth_note = f" @ {r.depth_mm:g}mm" if r.curve_type == "PROFILE" and r.depth_mm is not None else ""
-            label = f"{r.field_size or '?'} - {r.curve_type}{depth_note}"
+            if r.origin == "MEASURED":
+                origin_note = " (measured)"
+            elif r.origin == "CALCULATED":
+                origin_note = f" (TPS-calc{f', {r.algorithm}' if r.algorithm else ''})"
+            else:
+                origin_note = ""
+            label = f"{r.field_size or '?'} - {r.curve_type}{depth_note}{origin_note}"
             matches.append({
                 "label": label,
                 "field_size": r.field_size,
                 "curve_type": r.curve_type,
                 "depth_mm": r.depth_mm if r.curve_type == "PROFILE" else None,
+                "origin": r.origin,
+                "algorithm": r.algorithm,
                 "ref": r,
                 "eval": found,
             })
@@ -818,10 +834,17 @@ def render_cumulative_figure(matches: list, curve_type: str, title: str) -> byte
         ref = m["ref"].data
         ev = m["eval"].data
         depth_mm = m.get("depth_mm")
-        if curve_type == "PROFILE" and depth_mm is not None:
-            label = f"{m['field_size'] or f'curve {i + 1}'} @ {depth_mm:g}mm"
+        origin = m.get("origin", "")
+        if origin == "MEASURED":
+            origin_note = " (meas.)"
+        elif origin == "CALCULATED":
+            origin_note = " (TPS-calc)"
         else:
-            label = m["field_size"] or f"curve {i + 1}"
+            origin_note = ""
+        if curve_type == "PROFILE" and depth_mm is not None:
+            label = f"{m['field_size'] or f'curve {i + 1}'} @ {depth_mm:g}mm{origin_note}"
+        else:
+            label = f"{m['field_size'] or f'curve {i + 1}'}{origin_note}"
         ax.plot(ref[:, 0], ref[:, 1], color=color, lw=1.6, linestyle="-", label=label)
         ax.plot(ev[:, 0], ev[:, 1], color=color, lw=1.3, linestyle="--")
 
@@ -918,7 +941,16 @@ def build_energy_report_pdf(energy_label: str,
         curve_type = m["curve_type"]
         field_size = m["field_size"] or "?"
         depth_mm = m.get("depth_mm")
+        origin = m.get("origin", "")
+        algorithm = m.get("algorithm", "")
+        if origin == "MEASURED":
+            origin_note = " (measured)"
+        elif origin == "CALCULATED":
+            origin_note = f" (TPS-calc{f', {algorithm}' if algorithm else ''})"
+        else:
+            origin_note = ""
         display_label = f"{field_size} @ {depth_mm:g}mm" if (curve_type == "PROFILE" and depth_mm is not None) else field_size
+        display_label += origin_note
 
         gamma, gamma_percent, evaluated_points = gamma_1d(
             ref_curve.data, eval_curve.data,
