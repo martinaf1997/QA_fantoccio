@@ -723,7 +723,9 @@ def match_curves_by_field(ref_curves, eval_curves, depth_tolerance_mm: float = 0
 def render_comparison_figure(ref_data: np.ndarray, eval_data: np.ndarray,
                               gamma: np.ndarray, curve_type: str, title: str) -> bytes:
     """Render the standard 3-panel (overlay / difference / gamma) comparison
-    figure used throughout the app, returning PNG bytes."""
+    figure used in the PDF report, returning PNG bytes. Uses a taller
+    aspect ratio and larger fonts than a typical on-screen chart so it
+    reads well at nearly full page width in print."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -732,31 +734,34 @@ def render_comparison_figure(ref_data: np.ndarray, eval_data: np.ndarray,
     eval_on_ref = np.interp(ref_data[:, 0], eval_data[:, 0], eval_data[:, 1], left=np.nan, right=np.nan)
     difference = ref_data[:, 1] - eval_on_ref
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 3.8))
+    fig, axes = plt.subplots(1, 3, figsize=(13, 7))
 
-    axes[0].plot(ref_data[:, 0], ref_data[:, 1], label="Commissioning", lw=1.6)
-    axes[0].plot(eval_data[:, 0], eval_data[:, 1], label="Misura", lw=1.6, alpha=0.8)
-    axes[0].set_xlabel("Posizione [mm]")
-    axes[0].set_ylabel("Dose [%]")
-    axes[0].set_title(f"{curve_type} — Curve sovrapposte")
+    axes[0].plot(ref_data[:, 0], ref_data[:, 1], label="Commissioning", lw=2.0)
+    axes[0].plot(eval_data[:, 0], eval_data[:, 1], label="Misura", lw=2.0, alpha=0.8)
+    axes[0].set_xlabel("Posizione [mm]", fontsize=11)
+    axes[0].set_ylabel("Dose [%]", fontsize=11)
+    axes[0].set_title(f"{curve_type} — Curve sovrapposte", fontsize=12)
     axes[0].grid(alpha=0.3)
-    axes[0].legend(fontsize=8)
+    axes[0].tick_params(labelsize=9)
+    axes[0].legend(fontsize=10)
 
-    axes[1].plot(ref_data[:, 0], difference, color="crimson", lw=1.3)
-    axes[1].axhline(0, color="k", lw=0.7, alpha=0.5)
-    axes[1].set_xlabel("Posizione [mm]")
-    axes[1].set_ylabel("Differenza [%]")
-    axes[1].set_title("Differenza")
+    axes[1].plot(ref_data[:, 0], difference, color="crimson", lw=1.8)
+    axes[1].axhline(0, color="k", lw=0.8, alpha=0.5)
+    axes[1].set_xlabel("Posizione [mm]", fontsize=11)
+    axes[1].set_ylabel("Differenza [%]", fontsize=11)
+    axes[1].set_title("Differenza", fontsize=12)
     axes[1].grid(alpha=0.3)
+    axes[1].tick_params(labelsize=9)
 
-    axes[2].plot(gamma[:, 0], gamma[:, 1], color="green", lw=1.0, marker=".", markersize=3)
+    axes[2].plot(gamma[:, 0], gamma[:, 1], color="green", lw=1.4, marker=".", markersize=4)
     axes[2].axhline(1, color="green", ls="--", alpha=0.5)
-    axes[2].set_xlabel("Posizione [mm]")
-    axes[2].set_ylabel("Gamma")
-    axes[2].set_title("Indice Gamma")
+    axes[2].set_xlabel("Posizione [mm]", fontsize=11)
+    axes[2].set_ylabel("Gamma", fontsize=11)
+    axes[2].set_title("Indice Gamma", fontsize=12)
     axes[2].grid(alpha=0.3)
+    axes[2].tick_params(labelsize=9)
 
-    fig.suptitle(title, fontsize=11)
+    fig.suptitle(title, fontsize=14)
     fig.tight_layout()
 
     buf = _io.BytesIO()
@@ -819,13 +824,17 @@ def build_energy_report_pdf(energy_label: str,
                              gamma_dose_threshold: float = 0.0,
                              gamma_interp: int = 1,
                              pdd_depth_mm: float = 100.0,
-                             tolerance_pp: float = 1.0) -> bytes:
+                             tolerance_pp: float = 1.0,
+                             logo_bytes: bytes = None,
+                             physicist_name: str = "") -> bytes:
     """Build a PDF QA report for a set of commissioning-vs-measurement curve
     pairs belonging to the same energy/beam: gamma analysis, PDD
     dose-at-depth or profile flatness/symmetry checks, a summary table,
     cumulative multi-field-size overview charts (one for all PDDs, one for
-    all profiles), and a per-field-size section with its own comparison
-    chart and metrics table. Returns the PDF as bytes.
+    all profiles), a per-field-size section with its own (large) comparison
+    chart and metrics table, a final approval/signature block, a logo in
+    the page header (if `logo_bytes` is provided) and page numbers in the
+    footer of every page. Returns the PDF as bytes.
     """
     import io as _io
     from datetime import datetime
@@ -833,6 +842,8 @@ def build_energy_report_pdf(energy_label: str,
     from reportlab.lib.units import mm
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen.canvas import Canvas
     from reportlab.platypus import (
         SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle, Image as RLImage,
     )
@@ -844,11 +855,16 @@ def build_energy_report_pdf(energy_label: str,
     h2_style = ParagraphStyle("H2X", parent=styles["Heading2"], spaceBefore=14, spaceAfter=6)
     h3_style = ParagraphStyle("H3X", parent=styles["Heading3"], spaceBefore=10, spaceAfter=4)
     note_style = ParagraphStyle("NoteX", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#666666"), italic=True)
+    cell_style = ParagraphStyle("CellX", parent=styles["Normal"], fontSize=7.5, leading=9)
+    cell_header_style = ParagraphStyle("CellHX", parent=cell_style, textColor=colors.white, fontName="Helvetica-Bold")
+    mcell_style = ParagraphStyle("MCellX", parent=styles["Normal"], fontSize=8.5, leading=10)
+    mcell_header_style = ParagraphStyle("MCellHX", parent=mcell_style, textColor=colors.white, fontName="Helvetica-Bold")
 
     PASS_BG = colors.HexColor("#C6EFCE")
     FAIL_BG = colors.HexColor("#FFC7CE")
     HEADER_BG = colors.HexColor("#1F4E78")
 
+    TOP_MARGIN = 30 * mm if logo_bytes else 20 * mm
     content_width = A4[0] - 2 * 18 * mm
 
     def _png_flowable(png_bytes, max_width):
@@ -856,6 +872,9 @@ def build_energy_report_pdf(energy_label: str,
         iw, ih = im.size
         aspect = ih / iw
         return RLImage(_io.BytesIO(png_bytes), width=max_width, height=max_width * aspect)
+
+    def _cell(text, style):
+        return Paragraph(str(text), style)
 
     story = []
 
@@ -951,30 +970,39 @@ def build_energy_report_pdf(energy_label: str,
             "metric_rows": metric_rows,
         })
 
-    # -- Summary table ----------------------------------------------------
+    # -- Summary table ------------------------------------------------------
+    # Every cell is wrapped in a Paragraph so long filenames/labels wrap
+    # onto multiple lines within their column instead of overlapping
+    # neighbouring cells.
     story.append(Paragraph("Riepilogo", h2_style))
-    table_data = [["Field size", "Tipo", "Commissioning", "Misura", "Gamma [%]", "Verifica", "Dettagli"]]
+    header_cells = ["Field size", "Tipo", "Commissioning", "Misura", "Gamma [%]", "Verifica", "Dettagli"]
+    table_data = [[_cell(h, cell_header_style) for h in header_cells]]
     row_colors = []
     for res in results:
         verdict_str = "N/A" if res["main_pass"] is None else ("OK" if res["main_pass"] else "FUORI TOLL.")
         gp = res["gamma_percent"]
         gp_str = "N/A" if np.isnan(gp) else f"{gp:.1f}"
         table_data.append([
-            res["display_label"], res["curve_type"],
-            res["ref_curve"].source, res["eval_curve"].source,
-            gp_str, verdict_str, res["detail_text"],
+            _cell(res["display_label"], cell_style),
+            _cell(res["curve_type"], cell_style),
+            _cell(res["ref_curve"].source, cell_style),
+            _cell(res["eval_curve"].source, cell_style),
+            _cell(gp_str, cell_style),
+            _cell(verdict_str, cell_style),
+            _cell(res["detail_text"], cell_style),
         ])
         row_colors.append(res["main_pass"])
 
     summary_table = Table(table_data, repeatRows=1, hAlign="LEFT",
-                           colWidths=[22 * mm, 16 * mm, 30 * mm, 30 * mm, 18 * mm, 22 * mm, 32 * mm])
+                           colWidths=[20 * mm, 15 * mm, 30 * mm, 30 * mm, 16 * mm, 20 * mm, 43 * mm])
     ts = TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), HEADER_BG),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B7B7B7")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F5F5")]),
     ])
     for i, pass_val in enumerate(row_colors, start=1):
@@ -1000,7 +1028,7 @@ def build_energy_report_pdf(energy_label: str,
             story.append(Paragraph("Profili — tutti i field size", h3_style))
             story.append(_png_flowable(cum_profile_png, content_width))
 
-    # -- Per-field-size sections -------------------------------------------
+    # -- Per-field-size sections (large chart, minimal wasted space) --------
     for res in results:
         story.append(PageBreak())
         title = f"{res['display_label']} — {res['curve_type']}"
@@ -1013,23 +1041,24 @@ def build_energy_report_pdf(energy_label: str,
         png_bytes = render_comparison_figure(res["ref_curve"].data, res["eval_curve"].data,
                                               res["gamma"], res["curve_type"], fig_title)
         story.append(_png_flowable(png_bytes, content_width))
-        story.append(Spacer(1, 8))
+        story.append(Spacer(1, 10))
 
-        mt_data = [["Parametro", "Commissioning", "Misura", "Differenza", f"Entro ±{tolerance_pp:g}%"]]
+        mt_header = ["Parametro", "Commissioning", "Misura", "Differenza", f"Entro ±{tolerance_pp:g}%"]
+        mt_data = [[_cell(h, mcell_header_style) for h in mt_header]]
         mt_verdicts = []
         for param, rv, ev, diff_str, verdict in res["metric_rows"]:
             verdict_str = "—" if verdict is None else ("OK" if verdict else "FUORI TOLL.")
-            mt_data.append([param, rv, ev, diff_str, verdict_str])
+            mt_data.append([_cell(param, mcell_style), _cell(rv, mcell_style), _cell(ev, mcell_style),
+                             _cell(diff_str, mcell_style), _cell(verdict_str, mcell_style)])
             mt_verdicts.append(verdict)
 
         mt = Table(mt_data, hAlign="LEFT", colWidths=[45 * mm, 30 * mm, 30 * mm, 30 * mm, 30 * mm])
         mts = TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), HEADER_BG),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B7B7B7")),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ])
         for i, verdict in enumerate(mt_verdicts, start=1):
             if verdict is True:
@@ -1045,13 +1074,58 @@ def build_energy_report_pdf(energy_label: str,
                 "Nota: profilo parziale rilevato — field size/flatness stimati assumendo campo "
                 "simmetrico; symmetry non verificabile.", note_style))
 
+    # -- Approval / signature block -----------------------------------------
+    story.append(PageBreak())
+    story.append(Paragraph("Approvazione", h2_style))
+    story.append(Spacer(1, 30))
+
+    sign_label_style = ParagraphStyle("SignLabelX", parent=styles["Normal"], fontSize=11)
+    physicist_line = physicist_name if physicist_name else ""
+    approval_table = Table(
+        [
+            [Paragraph("Data:", sign_label_style), ""],
+            [Paragraph("Firma dello Specialista in Fisica Medica:", sign_label_style),
+             Paragraph(physicist_line, sign_label_style)],
+        ],
+        colWidths=[75 * mm, 95 * mm],
+        rowHeights=[18 * mm, 18 * mm],
+    )
+    approval_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+        ("LINEBELOW", (1, 0), (1, 0), 0.8, colors.black),
+        ("LINEBELOW", (1, 1), (1, 1), 0.8, colors.black),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(approval_table)
+
+    # -- Page header (logo) and footer (page numbers) on every page --------
+    def _draw_header_footer(canvas: Canvas, doc):
+        width, height = A4
+        canvas.saveState()
+
+        if logo_bytes:
+            try:
+                img_reader = ImageReader(_io.BytesIO(logo_bytes))
+                iw, ih = img_reader.getSize()
+                logo_h = 16 * mm
+                logo_w = logo_h * (iw / ih)
+                canvas.drawImage(img_reader, 18 * mm, height - 12 * mm - logo_h,
+                                  width=logo_w, height=logo_h, mask="auto", preserveAspectRatio=True)
+            except Exception:
+                pass
+
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(colors.HexColor("#666666"))
+        canvas.drawRightString(width - 18 * mm, 10 * mm, f"Pagina {canvas.getPageNumber()}")
+        canvas.restoreState()
+
     buf = _io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
-        leftMargin=18 * mm, rightMargin=18 * mm, topMargin=16 * mm, bottomMargin=16 * mm,
+        leftMargin=18 * mm, rightMargin=18 * mm, topMargin=TOP_MARGIN, bottomMargin=16 * mm,
         title=f"Report QA - {energy_label}",
     )
-    doc.build(story)
+    doc.build(story, onFirstPage=_draw_header_footer, onLaterPages=_draw_header_footer)
     buf.seek(0)
     return buf.getvalue()
 
