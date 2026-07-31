@@ -93,9 +93,12 @@ def bytes_to_lines(file_bytes: bytes) -> list[str]:
     """Decode uploaded file bytes into a list of stripped text lines.
     Real-world PTW .mcc exports are sometimes not valid UTF-8 (stray
     extended-ASCII bytes in free-text metadata fields), so fall back to
-    latin-1 (which never raises) if strict UTF-8 decoding fails."""
+    latin-1 (which never raises) if strict UTF-8 decoding fails.
+    ``utf-8-sig`` transparently strips a leading BOM if present (some
+    TPS bulk exports are saved with one) while still decoding plain
+    UTF-8 files normally."""
     try:
-        text = file_bytes.decode("utf-8")
+        text = file_bytes.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = file_bytes.decode("latin-1")
     return [line.strip() for line in text.splitlines()]
@@ -376,13 +379,163 @@ def _guess_type(data: np.ndarray) -> str:
 
 
 # --------------------------------------------------------------------------
+# Bulk multi-field-size matrix export (TPS "batch" commissioning download)
+# --------------------------------------------------------------------------
+#
+# Format observed: a metadata header (machine / algorithm / beam data /
+# "data: OPD" for PDD or "data: OPP" for profiles / column & row legends),
+# followed by one or more data blocks. Each block is a CSV-like matrix:
+# the header row lists FIELD SIZES as columns (one number per field side,
+# e.g. "100.0" -> a 100x100mm field), each subsequent row is one position
+# (depth for PDD, offaxis distance for profiles) with one dose value per
+# field-size column. Cells are blank where that particular field size
+# wasn't sampled at that exact position (different field sizes are often
+# scanned with different position spacing, interleaved into a shared
+# position axis).
+#
+# Profiles additionally repeat this block once per measurement depth,
+# each preceded by a "Curves at depth [mm]: <value>" line. PDD exports
+# have a single block (no depth marker, since depth IS the row axis).
+
+def _is_bulk_header_row(line: str) -> bool:
+    """A bulk-matrix header row: first (unlabeled) column is empty, the
+    rest are all parseable numbers (the field sizes)."""
+    if "," not in line:
+        return False
+    parts = [p.strip() for p in line.split(",")]
+    if len(parts) < 2 or parts[0] != "":
+        return False
+    try:
+        for p in parts[1:]:
+            if p != "":
+                float(p)
+        return True
+    except ValueError:
+        return False
+
+
+def is_bulk_matrix_format(lines: list[str]) -> bool:
+    """Detect the bulk multi-field-size matrix export by its metadata
+    header, regardless of file extension (these exports often have no
+    extension at all)."""
+    for l in lines[:20]:
+        if l.lower().startswith("column legend") or l.lower().startswith("row legend"):
+            return True
+    return False
+
+
+def parse_bulk_matrix(lines: list[str], source: str = "") -> list[Curve]:
+    """Extract every (field size) curve out of a bulk multi-field-size
+    matrix export, across all depth blocks (profiles) or the single
+    block (PDD)."""
+    n = len(lines)
+
+    data_type = "UNKNOWN"
+    for l in lines[:20]:
+        if l.lower().startswith("data:"):
+            val = l.split(":", 1)[1].strip().upper()
+            if val == "OPD":
+                data_type = "PDD"
+            elif val == "OPP":
+                data_type = "PROFILE"
+            break
+
+    curves: list[Curve] = []
+    depth_for_block = None
+
+    idx = 0
+    while idx < n:
+        line = lines[idx]
+
+        if line.lower().startswith("curves at depth"):
+            try:
+                depth_for_block = float(line.split(":", 1)[1].strip())
+            except ValueError:
+                depth_for_block = None
+            idx += 1
+            continue
+
+        if _is_bulk_header_row(line):
+            field_sizes = [p.strip() for p in line.split(",")][1:]
+
+            data_rows = []
+            j = idx + 1
+            while j < n and lines[j].strip() != "" and not lines[j].lower().startswith("curves at depth"):
+                data_rows.append(lines[j])
+                j += 1
+
+            columns_data = {k: [] for k in range(len(field_sizes))}
+            for row_line in data_rows:
+                parts = row_line.split(",")
+                if len(parts) < 2:
+                    continue
+                try:
+                    pos = float(parts[0])
+                except ValueError:
+                    continue
+                for k, val_str in enumerate(parts[1:]):
+                    if k >= len(field_sizes):
+                        break
+                    val_str = val_str.strip()
+                    if val_str == "":
+                        continue
+                    try:
+                        val = float(val_str)
+                    except ValueError:
+                        continue
+                    columns_data[k].append((pos, val))
+
+            for k, fs in enumerate(field_sizes):
+                rows = columns_data.get(k, [])
+                if len(rows) < 2:
+                    continue
+                rows.sort(key=lambda t: t[0])
+                arr = _normalize(np.array(rows, dtype=float))
+
+                try:
+                    fs_val = float(fs)
+                    fs_label = f"{fs_val:g}x{fs_val:g}"
+                except ValueError:
+                    fs_label = fs
+
+                curves.append(
+                    Curve(
+                        data=arr,
+                        curve_type=data_type,
+                        depth_mm=depth_for_block if data_type == "PROFILE" else None,
+                        field_size=fs_label,
+                        source=source,
+                    )
+                )
+
+            idx = j
+            continue
+
+        idx += 1
+
+    for i, c in enumerate(curves, start=1):
+        c.build_label(i)
+
+    return curves
+
+
+# --------------------------------------------------------------------------
 # Dispatcher
 # --------------------------------------------------------------------------
 
 def parse_file(file_bytes: bytes, filename: str) -> list[Curve]:
-    """Parse a .data or .mcc file (by extension) into a list of Curves."""
+    """Parse a commissioning/measurement file into a list of Curves.
+    Recognizes three formats: w2CAD (.data), PTW mcc (.mcc), and the
+    bulk multi-field-size matrix export (detected by content, since
+    those exports often have no file extension at all)."""
     lines = bytes_to_lines(file_bytes)
     lower = filename.lower()
+
+    # Content-based detection first: the bulk matrix format has no
+    # reliable extension, so check its metadata header regardless of name.
+    if is_bulk_matrix_format(lines):
+        return parse_bulk_matrix(lines, source=filename)
+
     if lower.endswith(".mcc"):
         return parse_mcc(lines, source=filename)
     elif lower.endswith(".data") or lower.endswith(".dat") or lower.endswith(".txt"):
@@ -392,7 +545,7 @@ def parse_file(file_bytes: bytes, filename: str) -> list[Curve]:
             curves = parse_mcc(lines, source=filename)
         return curves
     else:
-        # Unknown extension: try both parsers.
+        # Unknown extension: try every parser.
         curves = parse_w2cad(lines, source=filename)
         if not curves:
             curves = parse_mcc(lines, source=filename)
@@ -496,10 +649,17 @@ def parse_field_size(fs: str):
         return None
 
 
-def match_curves_by_field(ref_curves, eval_curves):
+def match_curves_by_field(ref_curves, eval_curves, depth_tolerance_mm: float = 0.5):
     """Best-effort auto-matching of commissioning (ref) curves to
     measurement (eval) curves sharing the same curve type (PDD/PROFILE)
     and the same field size (parsed via ``parse_field_size``).
+
+    For PROFILE curves, the measurement depth is also required to match
+    (within `depth_tolerance_mm`) whenever both sides carry depth
+    metadata -- this matters for bulk commissioning exports that hold
+    the same field size at several depths, where matching by field size
+    alone could silently pair the wrong depth. If depth metadata is
+    missing on either side, matching falls back to field size only.
 
     Returns
     -------
@@ -516,23 +676,41 @@ def match_curves_by_field(ref_curves, eval_curves):
         if r.curve_type not in ("PDD", "PROFILE"):
             continue
         r_fs = parse_field_size(r.field_size)
-        found = None
+
+        candidates = []
         for e in eval_curves:
             if id(e) in used_eval_ids:
                 continue
             if e.curve_type != r.curve_type:
                 continue
             e_fs = parse_field_size(e.field_size)
-            if r_fs is not None and e_fs is not None and r_fs == e_fs:
-                found = e
-                break
+            if r_fs is None or e_fs is None or r_fs != e_fs:
+                continue
+            candidates.append(e)
+
+        found = None
+        if r.curve_type == "PROFILE" and candidates:
+            both_have_depth = [e for e in candidates if r.depth_mm is not None and e.depth_mm is not None]
+            if both_have_depth:
+                depth_matched = [e for e in both_have_depth
+                                  if abs(e.depth_mm - r.depth_mm) <= depth_tolerance_mm]
+                found = depth_matched[0] if depth_matched else None
+            else:
+                # Neither side (or only one side) has depth metadata: fall
+                # back to matching by field size only, as before.
+                found = candidates[0]
+        elif candidates:
+            found = candidates[0]
+
         if found is not None:
             used_eval_ids.add(id(found))
-            label = f"{r.field_size or '?'} - {r.curve_type}"
+            depth_note = f" @ {r.depth_mm:g}mm" if r.curve_type == "PROFILE" and r.depth_mm is not None else ""
+            label = f"{r.field_size or '?'} - {r.curve_type}{depth_note}"
             matches.append({
                 "label": label,
                 "field_size": r.field_size,
                 "curve_type": r.curve_type,
+                "depth_mm": r.depth_mm if r.curve_type == "PROFILE" else None,
                 "ref": r,
                 "eval": found,
             })
@@ -610,7 +788,11 @@ def render_cumulative_figure(matches: list, curve_type: str, title: str) -> byte
         color = cmap(i % cmap.N)
         ref = m["ref"].data
         ev = m["eval"].data
-        label = m["field_size"] or f"curva {i + 1}"
+        depth_mm = m.get("depth_mm")
+        if curve_type == "PROFILE" and depth_mm is not None:
+            label = f"{m['field_size'] or f'curva {i + 1}'} @ {depth_mm:g}mm"
+        else:
+            label = m["field_size"] or f"curva {i + 1}"
         ax.plot(ref[:, 0], ref[:, 1], color=color, lw=1.6, linestyle="-", label=label)
         ax.plot(ev[:, 0], ev[:, 1], color=color, lw=1.3, linestyle="--")
 
@@ -692,6 +874,8 @@ def build_energy_report_pdf(energy_label: str,
         eval_curve = m["eval"]
         curve_type = m["curve_type"]
         field_size = m["field_size"] or "?"
+        depth_mm = m.get("depth_mm")
+        display_label = f"{field_size} @ {depth_mm:g}mm" if (curve_type == "PROFILE" and depth_mm is not None) else field_size
 
         gamma, gamma_percent, evaluated_points = gamma_1d(
             ref_curve.data, eval_curve.data,
@@ -759,7 +943,7 @@ def build_energy_report_pdf(energy_label: str,
                 detail_text = "Errore calcolo metriche"
 
         results.append({
-            "field_size": field_size, "curve_type": curve_type,
+            "field_size": field_size, "display_label": display_label, "curve_type": curve_type,
             "ref_curve": ref_curve, "eval_curve": eval_curve,
             "gamma": gamma, "gamma_percent": gamma_percent,
             "main_pass": main_pass, "detail_text": detail_text,
@@ -775,7 +959,7 @@ def build_energy_report_pdf(energy_label: str,
         gp = res["gamma_percent"]
         gp_str = "N/A" if np.isnan(gp) else f"{gp:.1f}"
         table_data.append([
-            res["field_size"], res["curve_type"],
+            res["display_label"], res["curve_type"],
             res["ref_curve"].source, res["eval_curve"].source,
             gp_str, verdict_str, res["detail_text"],
         ])
@@ -818,13 +1002,13 @@ def build_energy_report_pdf(energy_label: str,
     # -- Per-field-size sections -------------------------------------------
     for res in results:
         story.append(PageBreak())
-        title = f"{res['field_size']} — {res['curve_type']}"
+        title = f"{res['display_label']} — {res['curve_type']}"
         story.append(Paragraph(title, h2_style))
         story.append(Paragraph(
             f"Commissioning: {res['ref_curve'].source} — Misura: {res['eval_curve'].source}", meta_style))
         story.append(Spacer(1, 6))
 
-        fig_title = f"{res['field_size']} — {res['curve_type']}"
+        fig_title = f"{res['display_label']} — {res['curve_type']}"
         png_bytes = render_comparison_figure(res["ref_curve"].data, res["eval_curve"].data,
                                               res["gamma"], res["curve_type"], fig_title)
         story.append(_png_flowable(png_bytes, content_width))
