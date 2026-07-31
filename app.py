@@ -16,6 +16,9 @@ Workflow
        for both curves and compared against a +/-1% tolerance.
 """
 
+from __future__ import annotations
+
+import os
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
@@ -27,14 +30,34 @@ from dose_tools import (
 
 st.set_page_config(page_title="Relative Dose 1D - Commissioning QA", layout="wide")
 
+# --------------------------------------------------------------------
+# Fixed logo: drop a file named logo.png/.jpg/.jpeg into an "assets"
+# folder next to this script and it will be picked up automatically
+# for the PDF report header -- no need to upload it each time.
+# --------------------------------------------------------------------
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_LOGO_CANDIDATES = ["logo.png", "logo.jpg", "logo.jpeg"]
+
+
+def _load_fixed_logo() -> bytes | None:
+    for name in _LOGO_CANDIDATES:
+        path = os.path.join(APP_DIR, "assets", name)
+        if os.path.isfile(path):
+            with open(path, "rb") as f:
+                return f.read()
+    return None
+
+
+FIXED_LOGO_BYTES = _load_fixed_logo()
+
 st.title("Relative Dose 1D — Commissioning vs Measurement QA")
 st.caption(
-    "Carica uno o più file di **commissioning** (formato w2CAD `.data`, oppure export "
-    "**bulk multi-campo** del TPS senza estensione, con tutti i field size in un unico "
-    "file) e uno o più file di **misura** (formato PTW `.mcc`). Tutte le curve trovate nei "
-    "file caricati vengono raccolte in un unico elenco da cui scegliere cosa confrontare. "
-    "Il confronto include l'analisi gamma (PDD e profili) e, solo per i profili, "
-    "flatness / symmetry / penombra con verifica di tolleranza ±1%."
+    "Carica uno o più file di **riferimento** — commissioning misurato (w2CAD `.data`, "
+    "bulk multi-campo misurato) e/o curve **calcolate dal TPS** (bulk multi-campo "
+    "`_calculated`, es. Acuros/AAA) — e uno o più file di **misura** (formato PTW `.mcc`). "
+    "Tutte le curve trovate nei file caricati vengono raccolte in un unico elenco da cui "
+    "scegliere cosa confrontare. Il confronto include l'analisi gamma (PDD e profili) e, "
+    "solo per i profili, flatness / symmetry / penombra con verifica di tolleranza ±1%."
 )
 
 # --------------------------------------------------------------------
@@ -52,9 +75,10 @@ if "measurement_curves" not in st.session_state:
 col_up1, col_up2 = st.columns(2)
 
 with col_up1:
-    st.subheader("1️⃣ Commissioning")
+    st.subheader("1️⃣ Commissioning / TPS")
     commissioning_files = st.file_uploader(
-        "File di commissioning (w2CAD .data, oppure export bulk multi-campo senza estensione)",
+        "File di riferimento: commissioning misurato (w2CAD .data, bulk misurato) "
+        "e/o curve calcolate dal TPS (bulk `_calculated`, es. Acuros/AAA) — anche insieme",
         type=None,
         key="commissioning_upload", accept_multiple_files=True,
     )
@@ -69,7 +93,17 @@ with col_up1:
                 errors.append(f.name)
         st.session_state.commissioning_curves = curves
         if curves:
-            st.success(f"{len(curves)} curva/e trovata/e in {len(commissioning_files)} file di commissioning.")
+            n_calc = sum(1 for c in curves if c.origin == "CALCULATED")
+            n_meas = len(curves) - n_calc
+            detail = []
+            if n_meas:
+                detail.append(f"{n_meas} misurate")
+            if n_calc:
+                detail.append(f"{n_calc} calcolate TPS")
+            st.success(
+                f"{len(curves)} curva/e trovata/e in {len(commissioning_files)} file "
+                f"({', '.join(detail)})."
+            )
         if errors:
             st.error("Nessuna curva riconosciuta in: " + ", ".join(errors))
     else:
@@ -150,7 +184,7 @@ if ref_curves and eval_curves:
     with g3:
         dose_threshold = st.number_input("Soglia dose [%]", value=0.0, min_value=0.0, step=1.0)
     with g4:
-        interp = st.number_input("Punti interpolati", value=5, min_value=0, step=1)
+        interp = st.number_input("Punti interpolati", value=1, min_value=0, step=1)
 
     run = st.button("▶️ Esegui analisi", type="primary")
 
@@ -410,10 +444,14 @@ if ref_curves and eval_curves:
 
     r3, r4 = st.columns(2)
     with r3:
-        logo_file = st.file_uploader(
-            "Logo (opzionale, comparirà in alto su ogni pagina)",
-            type=["png", "jpg", "jpeg"], key="logo_upload",
-        )
+        if FIXED_LOGO_BYTES:
+            st.success("✅ Logo trovato in `assets/` — verrà incluso automaticamente in ogni pagina del report.")
+        else:
+            st.caption(
+                "ℹ️ Nessun logo trovato. Per includerlo nel report, aggiungi un file "
+                "`logo.png` (o `.jpg`/`.jpeg`) nella cartella `assets/` accanto ad `app.py` "
+                "e ricarica la pagina."
+            )
     with r4:
         physicist_name = st.text_input(
             "Nome specialista in Fisica Medica (opzionale)", value="",
@@ -428,7 +466,7 @@ if ref_curves and eval_curves:
                 gamma_dose_t=dose_t, gamma_dist_t=dist_t,
                 gamma_dose_threshold=dose_threshold, gamma_interp=int(interp),
                 pdd_depth_mm=report_depth, tolerance_pp=report_tol,
-                logo_bytes=logo_file.getvalue() if logo_file is not None else None,
+                logo_bytes=FIXED_LOGO_BYTES,
                 physicist_name=physicist_name,
             )
         safe_label = "".join(c if c.isalnum() else "_" for c in (energy_label or "report"))
@@ -453,11 +491,17 @@ with st.expander("ℹ️ Informazioni sui formati supportati"):
   `SCAN_DEPTH`, `FIELD_INPLANE`/`FIELD_CROSSPLANE` e i dati numerici tra
   `BEGIN_DATA` e `END_DATA`.
 - **Export bulk multi-campo (TPS, di solito senza estensione)** — un
-  singolo file di commissioning con **tutti i field size** in un'unica
-  matrice: colonne = field size (mm), righe = profondità (PDD) o
-  distanza off-axis (profili). Per i profili il file può contenere più
-  blocchi, uno per ciascuna profondità di misura (`Curves at depth [mm]: ...`).
-  Riconosciuto automaticamente dal contenuto (non serve l'estensione).
+  singolo file con **tutti i field size** in un'unica matrice: colonne =
+  field size (mm), righe = profondità (PDD) o distanza off-axis (profili).
+  Per i profili il file può contenere più blocchi, uno per ciascuna
+  profondità (`Curves at depth [mm]: ...`). Riconosciuto automaticamente
+  dal contenuto (non serve l'estensione). Esistono due varianti,
+  distinte automaticamente e riportate nell'etichetta della curva:
+  - **misurato** (`data: OPD` / `OPP`);
+  - **calcolato dal TPS** (`data: OPD_calculated` / `OPP_calculated`,
+    es. algoritmo Acuros/AAA) — etichettato come `TPS-calc (algoritmo)`,
+    utile per confrontare le misure anche con il calcolo del TPS oltre
+    che con il commissioning.
 - Un singolo file può contenere **più curve** (campi/profondità/direzioni
   diverse): seleziona quella desiderata dai menu a tendina sopra, oppure
   usa il report per energia per includerle tutte insieme.
