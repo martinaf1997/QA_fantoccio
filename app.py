@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 
 from dose_tools import (
     parse_file, gamma_1d, profile_metrics, dose_at_depth, Curve,
-    match_curves_by_field, build_energy_report,
+    match_curves_by_field, build_energy_report_pdf,
 )
 
 st.set_page_config(page_title="Relative Dose 1D - Commissioning QA", layout="wide")
@@ -365,11 +365,13 @@ if ref_curves and eval_curves:
     # Report per energia: tutte le curve (PDD + profili) di uno stesso fascio
     # --------------------------------------------------------------------
     st.divider()
-    st.subheader("5️⃣ Report Excel per energia")
+    st.subheader("5️⃣ Report PDF per energia")
     st.caption(
-        "Genera un report Excel con grafici e tabelle per **tutte** le curve caricate "
+        "Genera un report PDF con grafici e tabelle per **tutte** le curve caricate "
         "(PDD e profili), abbinando automaticamente commissioning e misura per field size. "
-        "Utile per raccogliere in un unico documento l'intera caratterizzazione di un'energia/fascio."
+        "Include grafici per singolo campo e grafici cumulativi con tutti i field size "
+        "sovrapposti (uno per le PDD, uno per i profili). Utile per raccogliere in un unico "
+        "documento l'intera caratterizzazione di un'energia/fascio."
     )
 
     energy_label = st.text_input("Nome energia / fascio", value="", placeholder="es. 6X FFF, 6X, 10X...")
@@ -402,9 +404,9 @@ if ref_curves and eval_curves:
     with r2:
         report_tol = st.number_input("Tolleranza principale [%]", value=1.0, min_value=0.1, step=0.5)
 
-    if matches and st.button("📊 Genera report Excel", type="primary"):
+    if matches and st.button("📄 Genera report PDF", type="primary"):
         with st.spinner("Generazione report in corso..."):
-            report_bytes = build_energy_report(
+            report_bytes = build_energy_report_pdf(
                 energy_label=energy_label or "Energia non specificata",
                 matches=matches,
                 gamma_dose_t=dose_t, gamma_dist_t=dist_t,
@@ -413,10 +415,10 @@ if ref_curves and eval_curves:
             )
         safe_label = "".join(c if c.isalnum() else "_" for c in (energy_label or "report"))
         st.download_button(
-            "⬇️ Scarica report Excel",
+            "⬇️ Scarica report PDF",
             data=report_bytes,
-            file_name=f"report_{safe_label}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            file_name=f"report_{safe_label}.pdf",
+            mime="application/pdf",
         )
         st.success("Report generato. Usa il pulsante sopra per scaricarlo.")
 
