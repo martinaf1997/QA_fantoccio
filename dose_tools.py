@@ -60,6 +60,8 @@ class Curve:
     direction: str = ""              # 'INPLANE' / 'CROSSPLANE' / 'DIAGONAL' / ''
     depth_mm: float | None = None
     field_size: str = ""             # e.g. "100x100"
+    origin: str = ""                 # 'MEASURED' / 'CALCULATED' / '' (unknown, e.g. w2CAD/mcc)
+    algorithm: str = ""              # e.g. 'Acurous_18.0.1' (TPS calculation algorithm, if known)
     label: str = ""                  # human readable, built at the end
     source: str = ""                 # file name
 
@@ -73,6 +75,9 @@ class Curve:
             parts.append(f"depth={self.depth_mm:g}mm")
         if self.field_size:
             parts.append(f"field={self.field_size}")
+        if self.origin == "CALCULATED":
+            algo_note = f" ({self.algorithm})" if self.algorithm else ""
+            parts.append(f"TPS-calc{algo_note}")
         self.label = " | ".join(parts)
         return self.label
 
@@ -431,14 +436,21 @@ def parse_bulk_matrix(lines: list[str], source: str = "") -> list[Curve]:
     n = len(lines)
 
     data_type = "UNKNOWN"
+    origin = "MEASURED"
+    algorithm = ""
     for l in lines[:20]:
-        if l.lower().startswith("data:"):
+        ll = l.lower()
+        if ll.startswith("data:"):
             val = l.split(":", 1)[1].strip().upper()
-            if val == "OPD":
+            # "OPD"/"OPP" = measured; "OPD_calculated"/"OPP_calculated" = TPS-calculated
+            if val.startswith("OPD"):
                 data_type = "PDD"
-            elif val == "OPP":
+            elif val.startswith("OPP"):
                 data_type = "PROFILE"
-            break
+            if "CALCULATED" in val:
+                origin = "CALCULATED"
+        elif ll.startswith("algorithm:"):
+            algorithm = l.split(":", 1)[1].strip()
 
     curves: list[Curve] = []
     depth_for_block = None
@@ -504,6 +516,8 @@ def parse_bulk_matrix(lines: list[str], source: str = "") -> list[Curve]:
                         curve_type=data_type,
                         depth_mm=depth_for_block if data_type == "PROFILE" else None,
                         field_size=fs_label,
+                        origin=origin,
+                        algorithm=algorithm,
                         source=source,
                     )
                 )
