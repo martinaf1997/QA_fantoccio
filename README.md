@@ -167,6 +167,6 @@ confirming whether the logo was found.
 - Parsing of the supported formats was validated against real files available during development; untested export variants may require parser adjustments.
 - The PDF report generates one page per matched field size/type pair: with very many combinations (e.g. dozens of field sizes × several depths) the document can become large.
 
-## License
+## Disclaimer
 
-To be defined.
+For research purpose only.
