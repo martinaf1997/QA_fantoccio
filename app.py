@@ -410,7 +410,11 @@ if ref_curves and eval_curves:
         "characterization of an energy/beam in a single document."
     )
 
-    energy_label = st.text_input("Energy / beam name", value="", placeholder="e.g. 6X FFF, 6X, 10X...")
+    col_energy, col_machine = st.columns(2)
+    with col_energy:
+        energy_label = st.text_input("Energy / beam name", value="", placeholder="e.g. 6X FFF, 6X, 10X...")
+    with col_machine:
+        machine_name = st.text_input("Machine name", value="", placeholder="e.g. TrueBeam 1, EDGE, Versa HD...")
 
     matches, unmatched_ref = match_curves_by_field(ref_curves, eval_curves)
 
@@ -468,6 +472,7 @@ if ref_curves and eval_curves:
                 pdd_depth_mm=report_depth, tolerance_pp=report_tol,
                 logo_bytes=FIXED_LOGO_BYTES,
                 physicist_name=physicist_name,
+                machine_name=machine_name,
             )
         safe_label = "".join(c if c.isalnum() else "_" for c in (energy_label or "report"))
         st.download_button(
