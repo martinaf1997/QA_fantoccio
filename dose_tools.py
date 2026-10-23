@@ -872,7 +872,8 @@ def build_energy_report_pdf(energy_label: str,
                              pdd_depth_mm: float = 100.0,
                              tolerance_pp: float = 1.0,
                              logo_bytes: bytes = None,
-                             physicist_name: str = "") -> bytes:
+                             physicist_name: str = "",
+                             machine_name: str = "") -> bytes:
     """Build a PDF QA report for a set of commissioning-vs-measurement curve
     pairs belonging to the same energy/beam: gamma analysis, PDD
     dose-at-depth or profile flatness/symmetry checks, a summary table,
@@ -880,7 +881,9 @@ def build_energy_report_pdf(energy_label: str,
     all profiles), a per-field-size section with its own (large) comparison
     chart and metrics table, a final approval/signature block, a logo in
     the page header (if `logo_bytes` is provided) and page numbers in the
-    footer of every page. Returns the PDF as bytes.
+    footer of every page. `machine_name`, if given, is shown next to the
+    energy/beam name in the report header and footer. Returns the PDF as
+    bytes.
     """
     import io as _io
     from datetime import datetime
@@ -926,6 +929,8 @@ def build_energy_report_pdf(energy_label: str,
 
     # -- Cover / header -------------------------------------------------
     story.append(Paragraph(f"QA Report — {energy_label}", title_style))
+    if machine_name:
+        story.append(Paragraph(f"Machine: {machine_name}", meta_style))
     story.append(Paragraph(f"Generated on {datetime.now().strftime('%d/%m/%Y %H:%M')}", meta_style))
     story.append(Paragraph(
         f"Gamma parameters: Dose {gamma_dose_t:g}% | DTA {gamma_dist_t:g}mm | "
@@ -1183,6 +1188,8 @@ def build_energy_report_pdf(energy_label: str,
 
     # -- Page header (logo) and footer (title + page numbers) on every page --
     footer_title = f"QA Report - {energy_label}"
+    if machine_name:
+        footer_title += f" - {machine_name}"
 
     def _draw_header_footer(canvas: Canvas, doc):
         width, height = A4
@@ -1209,7 +1216,7 @@ def build_energy_report_pdf(energy_label: str,
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=18 * mm, rightMargin=18 * mm, topMargin=TOP_MARGIN, bottomMargin=16 * mm,
-        title=f"QA Report - {energy_label}",
+        title=footer_title,
     )
     doc.build(story, onFirstPage=_draw_header_footer, onLaterPages=_draw_header_footer)
     buf.seek(0)
