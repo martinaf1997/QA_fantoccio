@@ -474,7 +474,7 @@ if ref_curves and eval_curves:
                 physicist_name=physicist_name,
                 machine_name=machine_name,
             )
-        safe_label = "".join(c if c.isalnum() else "_" for c in (energy_label or "report"))
+        safe_label = "".join(c if c.isalnum() else "_" for c in (machine_name or energy_label or "report"))
         st.download_button(
             "⬇️ Download PDF report",
             data=report_bytes,
